@@ -9,15 +9,47 @@ async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
   provider2: ReturnType<typeof createProvider>, model2: string,
   proposals: Proposal[], critique: { model: string; content: string }, lang: 'en' | 'de'
-): Promise<{ primary: Synthesis; verification: { similarity_score: number; diverged: boolean } }> {
-  const [primary, secondary] = await Promise.all([
+): Promise<{ primary: Synthesis; verification: { similarity_score: number; diverged: boolean; synth_coverage?: number } }> {
+  if (provider1 === provider2 && model1 === model2) {
+    throw new Error('Dual synthesizer requires distinct provider+model pairs');
+  }
+
+  const SIMILARITY_DIVERGENCE_THRESHOLD = 0.6;
+
+  const synthCalls = [
     runSynthesizer(provider1, model1, proposals, critique, lang),
     runSynthesizer(provider2, model2, proposals, critique, lang),
-  ]);
-  const overlap = primary.content.slice(0, 120) === secondary.content.slice(0, 120) ? 0.9 : 0.4;
+  ];
+
+  const results = await Promise.allSettled(synthCalls);
+
+  const fulfilled = results.filter((result) => result.status === 'fulfilled') as { value: Synthesis }[];
+
+  if (fulfilled.length === 0) {
+    throw new Error('Both synthesizers failed');
+  }
+
+  const primary = fulfilled[0].value;
+
+  const verification = {
+    similarity_score: 0,
+    diverged: true,
+    synth_coverage: fulfilled.length / 2,
+  };
+
+  if (fulfilled.length > 1) {
+    const secondary = fulfilled[1].value;
+    const tokensA = new Set(primary.content.toLowerCase().split(/\s+/));
+    const tokensB = new Set(secondary.content.toLowerCase().split(/\s+/));
+    const intersection = new Set([...tokensA].filter(t => tokensB.has(t)));
+    const union = new Set([...tokensA, ...tokensB]);
+    verification.similarity_score = union.size === 0 ? 1.0 : intersection.size / union.size;
+    verification.diverged = verification.similarity_score < SIMILARITY_DIVERGENCE_THRESHOLD;
+  }
+
   return {
     primary,
-    verification: { similarity_score: overlap, diverged: overlap < 0.6 },
+    verification,
   };
 }
 
@@ -32,6 +64,7 @@ interface VerifyParams {
   question: string;
   output?: string;
   language?: 'en' | 'de';
+  debug?: boolean;
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -46,6 +79,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const tier = params.tier || 'basic';
   const lang = params.language || 'en';
 
+  const MAX_INPUT_LENGTH = { basic: 2000, pro: 8000, deep: 32000 };
+  if (params.question.length > MAX_INPUT_LENGTH[tier as keyof typeof MAX_INPUT_LENGTH]) {
+    throw new Error(`Input exceeds ${tier} tier limit (${MAX_INPUT_LENGTH[tier as keyof typeof MAX_INPUT_LENGTH]} chars)`);
+  }
+
   const genNames = params.providers?.generators || DEFAULT_GEN_NAMES.slice(0, tier === 'pro' ? 4 : 1);
   const criticName = params.providers?.critic || 'anthropic';
   const synthName = params.providers?.synthesizer || 'anthropic';
@@ -54,7 +92,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     const model = DEFAULT_MODELS[name as keyof typeof DEFAULT_MODELS] || DEFAULT_MODELS.anthropic;
     const apiKey = params.apiKeys[name];
     if (!apiKey) {
-      throw new Error(`Missing API key for provider '${name}'.`);
+      throw new Error('Provider configuration invalid');
     }
     return {
       name,
@@ -65,7 +103,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   }
 
   const genConfigs = genNames.map(buildConfig);
-  const gensProviders = genConfigs.map(c => ({ provider: createProvider(c), model: c.model }));
+  const gensProviders = genConfigs.map((c) => {
+    const provider = createProvider(c);
+    if ((c as any).apiKey) (c as any).apiKey = undefined;
+    return { provider, model: c.model };
+  });
 
   let proposals: Proposal[] = await runGenerators(gensProviders, params.question, lang);
   if (output) {
@@ -74,28 +116,35 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   const criticConfig = buildConfig(criticName);
   const criticProvider = createProvider(criticConfig);
+  if ((criticConfig as any).apiKey) (criticConfig as any).apiKey = undefined;
   const critique = await runCritic(criticProvider, criticConfig.model, proposals, lang);
 
   const synthConfig = buildConfig(synthName);
   const synthProvider = createProvider(synthConfig);
+  if ((synthConfig as any).apiKey) (synthConfig as any).apiKey = undefined;
 
   let synthesis: Synthesis;
-  let dissent = undefined;
+  let dissent: any = undefined;
 
-  if (tier === 'pro') {
-    // For pro, use dual synthesizer for verification
+  if (tier === 'pro' && gensProviders.length >= 2) {
+    const synth1 = gensProviders[0];
+    const synth2 = gensProviders[1];
     const { primary, verification } = await runDualSynthesizer(
-      synthProvider, synthConfig.model,
-      synthProvider, synthConfig.model, // same for simple, could rotate
+      synth1.provider, synth1.model,
+      synth2.provider, synth2.model,
       proposals, critique, lang
     );
     synthesis = primary;
-    dissent = {
-      similarity_score: verification.similarity_score,
-      diverged: verification.diverged,
-    };
+    dissent = verification;
   } else {
-    synthesis = await runSynthesizer(synthProvider, synthConfig.model, proposals, critique, lang);
+    const synth_model = synthConfig.model;
+    if (tier === 'pro') {
+      dissent = {
+        dual_synthesis: false,
+        single_source_warning: "Only one provider available; dual synthesis skipped",
+      };
+    }
+    synthesis = await runSynthesizer(synthProvider, synth_model, proposals, critique, lang);
   }
 
   const genProposals = proposals.filter(p => p.model !== 'user-output');
@@ -104,7 +153,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const confidence = parseConfidence(synthesis.content);
 
   const flags: VerificationFlag[] = [];
-  if (critique.content.toLowerCase().includes('unverified')) flags.push('unverified-claims');
+  const UNVERIFIED_PATTERN = /\bunverified\b/i;
+  if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
   if (balance.warning) flags.push('synthesis-dominance');
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
@@ -116,7 +166,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     return acc;
   }, {});
 
-  return {
+  const result = {
     verified,
     confidence,
     tier,
@@ -126,6 +176,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     sas: balance.score,
     biasMap,
     dissent,
-    raw: { proposals, critique, synthesis },
-  };
+  } as VerificationResult;
+
+  if (params.debug) {
+    (result as any).raw = { proposals, critique, synthesis };
+  }
+
+  return result;
 }
