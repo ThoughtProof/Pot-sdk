@@ -57,12 +57,13 @@ pot-sdk/
 │   ├── attestation.ts     # Cryptographic attestation
 │   ├── providers/
 │   │   ├── index.ts       # Provider registry
-│   │   ├── openai.ts      # OpenAI provider
-│   │   ├── anthropic.ts   # Anthropic provider
-│   │   ├── xai.ts         # xAI/Grok provider
+│   │   ├── anthropic.ts   # Anthropic provider (Claude)
+│   │   ├── xai.ts         # xAI provider (Grok)
 │   │   ├── deepseek.ts    # DeepSeek provider
-│   │   ├── moonshot.ts    # Moonshot/Kimi provider
+│   │   ├── moonshot.ts    # Moonshot provider (Kimi)
 │   │   └── base.ts        # Base provider interface
+│   │   # NOTE: No OpenAI provider. The 4 core providers are Anthropic, xAI, DeepSeek, Moonshot.
+│   │   # Additional providers can be added via the base interface.
 │   ├── pipeline/
 │   │   ├── generator.ts   # Generator phase
 │   │   ├── critic.ts      # Critic phase

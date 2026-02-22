@@ -1,0 +1,32 @@
+{
+  "name": "pot-sdk",
+  "version": "1.0.0",
+  "description": "Proof of Thought SDK - Multi-model verification for AI outputs",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "test": "vitest run",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "keywords": ["ai", "verification", "multi-model", "proof-of-thought", "sdk"],
+  "author": "ThoughtProof",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "tsup": "^8",
+    "vitest": "^1",
+    "eslint": "^8",
+    "prettier": "^3"
+  },
+  "dependencies": {}
+}
