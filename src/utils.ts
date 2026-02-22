@@ -2,7 +2,7 @@ import type { Proposal } from './types.js';
 import { extractKeywords, type SynthesisBalance } from './pipeline/synthesizer.js';
 
 export function parseConfidence(text: string): number {
-  const match = text.match(/confidence[:\\s]*(\\d+(?:\\.\\d+)?)%/i);
+  const match = text.match(/confidence[:\s]*(\d+(?:\.\d+)?)%/i);
   return match ? parseFloat(match[1]) / 100 : 0.5;
 }
 

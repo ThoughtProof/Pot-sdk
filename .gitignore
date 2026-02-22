@@ -3,3 +3,6 @@ dist/
 *.js.map
 .env
 .env.local
+test-sdk.mjs
+test-*.mjs
+.env*

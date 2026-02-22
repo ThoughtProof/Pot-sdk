@@ -12,10 +12,10 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
 };
 
 const DEFAULT_MODELS: Record<string, string> = {
-  'anthropic': 'claude-3-5-sonnet-20241022',
-  'xai': 'grok-beta',
+  'anthropic': 'claude-sonnet-4-6',
+  'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
-  'moonshot': 'moonshot-v1-8k',
+  'moonshot': 'kimi-k2-turbo-preview',
 };
 
 export function detectBaseUrl(providerName: string, model: string): string {

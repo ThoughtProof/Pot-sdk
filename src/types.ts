@@ -25,7 +25,8 @@ export interface VerificationResult {
   sas?: number;
   biasMap?: Record<string, number>;
   dissent?: any;
-  raw: {
+  synthesis?: string;
+  raw?: {
     proposals: Proposal[];
     critique: Critique;
     synthesis: Synthesis;

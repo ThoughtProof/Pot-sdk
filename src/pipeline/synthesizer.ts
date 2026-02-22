@@ -9,7 +9,7 @@ TRANSPARENCY — ZWINGEND EINZUHALTEN:
 - Du MUSST dokumentieren, welche Argumente du VERWIRFST und WARUM
 - Wenn du eine Position stark gewichtest: begründe es mit dem Evaluation/Critique-Ergebnis
 - Dominanz ist OK wenn begründet — undokumentierte Dominanz ist das Problem
-- Füge am Ende einen kurzen &quot;Synthesis Decisions&quot; Block ein: welche Argumente übernommen, welche verworfen, warum
+- Füge am Ende einen kurzen "Synthesis Decisions" Block ein: welche Argumente übernommen, welche verworfen, warum
 
 REGELN:
 - Nutze die Stärken aller Proposals
@@ -17,19 +17,19 @@ REGELN:
 - Gib eine klare Empfehlung
 
 CONFIDENCE-BEWERTUNG (PFLICHT):
-- Schreibe am Ende &quot;Confidence: X%&quot;
+- Schreibe am Ende "Confidence: X%"
 - Maximum 85% — kein Multi-Modell-System kann Wahrheit garantieren
 - Bei subjektiven/strategischen Fragen: Maximum 70%
 - Bei Fragen wo alle Modelle übereinstimmen aber der Critic Shared Bias fand: Maximum 60%
 - Hoher Dissens zwischen Proposals = NIEDRIGERE Confidence, nicht gemittelt
 
 DISSENS-ABSCHNITT (PFLICHT):
-- Füge einen &quot;Wo die Modelle sich widersprechen&quot; Abschnitt ein
+- Füge einen "Wo die Modelle sich widersprechen" Abschnitt ein
 - Erkläre WARUM sie sich widersprechen
 - Verstecke Dissens NICHT — er ist das wertvollste Signal
 
 DISCLAIMER:
-- Ende mit: &quot;⚠️ Multi-Modell-Analyse — keine verifizierte Wahrheit. Dissens oben hervorgehoben.&quot;
+- Ende mit: "⚠️ Multi-Modell-Analyse — keine verifizierte Wahrheit. Dissens oben hervorgehoben."
 
 - Max 800 Wörter
 
@@ -48,7 +48,7 @@ TRANSPARENCY — MANDATORY:
 - You MUST document which arguments you REJECT and WHY
 - If you weight one position heavily: justify it with the Evaluation/Critique results
 - Dominance is OK when justified — undocumented dominance is the problem
-- Add a brief &quot;Synthesis Decisions&quot; section at the end: which arguments adopted, which rejected, why
+- Add a brief "Synthesis Decisions" section at the end: which arguments adopted, which rejected, why
 
 RULES:
 - Use the strengths of all proposals
@@ -56,19 +56,19 @@ RULES:
 - Give a clear recommendation
 
 CONFIDENCE SCORING (MANDATORY):
-- State &quot;Confidence: X%&quot; at the end
+- State "Confidence: X%" at the end
 - Cap confidence at 85% maximum — no multi-model system can guarantee truth
 - For subjective/strategic questions: cap at 70%
 - For questions where all models agree but the critic found shared bias: cap at 60%
 - High disagreement between proposals = LOWER confidence, not averaged confidence
 
 DISAGREEMENT SECTION (MANDATORY):
-- Include a &quot;Where Models Disagreed&quot; section
+- Include a "Where Models Disagreed" section
 - Explain WHY they disagreed (different assumptions? different data? different frameworks?)
 - Do NOT hide disagreement — it is the most valuable signal
 
 DISCLAIMER:
-- End with: &quot;⚠️ Multi-model analysis — not verified truth. Disagreements highlighted above.&quot;
+- End with: "⚠️ Multi-model analysis — not verified truth. Disagreements highlighted above."
 
 - Max 800 words
 

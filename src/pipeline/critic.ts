@@ -9,7 +9,7 @@ REGELN:
 
 FAKTEN-VERIFIZIERUNG (KRITISCH):
 - Verifiziere JEDE spezifische Behauptung, Statistik, jedes Datum und Zitat
-- Markiere Zahlen/Prozente die du nicht unabhängig bestätigen kannst als &quot;UNVERIFIZIERT: [Behauptung]&quot;
+- Markiere Zahlen/Prozente die du nicht unabhängig bestätigen kannst als "UNVERIFIZIERT: [Behauptung]"
 - Prüfe auf halluzinierte Zitate (Studien, Papers, Berichte die möglicherweise nicht existieren)
 - Wenn ein Proposal eine Quelle zitiert, prüfe ob die Quelle das aussagt what behauptet wird
 
@@ -36,7 +36,7 @@ RULES:
 
 FACTUAL VERIFICATION (CRITICAL):
 - Verify EVERY specific claim, statistic, date, and citation in each proposal
-- Flag any number, percentage, or data point you cannot independently confirm as &quot;UNVERIFIED: [claim]&quot;
+- Flag any number, percentage, or data point you cannot independently confirm as "UNVERIFIED: [claim]"
 - Check for hallucinated citations (papers, studies, reports that may not exist)
 - If a proposal cites a specific source, verify the source says what the proposal claims
 

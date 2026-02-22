@@ -5,7 +5,7 @@ const GENERATOR_PROMPT_DE = `Du bist ein unabhängiger Analyst. Beantworte diese
 {context}
 
 REGELN:
-- Leg dich fest. Keine &quot;es kommt drauf an&quot; ohne konkrete Bedingungen
+- Leg dich fest. Keine "es kommt drauf an" ohne konkrete Bedingungen
 - Nenne Zahlen wo möglich
 - Sag was schiefgehen kann
 - Max 500 Wörter
@@ -17,7 +17,7 @@ const GENERATOR_PROMPT_EN = `You are an independent analyst. Answer this questio
 {context}
 
 RULES:
-- Take a stand. No &quot;it depends&quot; without concrete conditions
+- Take a stand. No "it depends" without concrete conditions
 - Provide numbers where possible
 - Say what can go wrong
 - Max 500 words
@@ -35,7 +35,7 @@ export async function runGenerator(
   if (dryRun) {
     return {
       model: model.split('/').pop() || model,
-      content: `[DRY-RUN] Simulated response from ${model} for question: &quot;${question}&quot;\\n\\nThis is a placeholder response that would contain the actual analysis.`,
+      content: `[DRY-RUN] Simulated response from ${model} for question: "${question}"\\n\\nThis is a placeholder response that would contain the actual analysis.`,
     };
   }
 

@@ -69,10 +69,10 @@ interface VerifyParams {
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
 const DEFAULT_MODELS: Record<string, string> = {
-  'anthropic': 'claude-3-5-sonnet-20241022',
-  'xai': 'grok-beta',
+  'anthropic': 'claude-sonnet-4-6',
+  'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
-  'moonshot': 'moonshot-v1-8k',
+  'moonshot': 'kimi-k2-turbo-preview',
 };
 
 export async function verify(output: string, params: VerifyParams): Promise<VerificationResult> {
@@ -176,6 +176,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     sas: balance.score,
     biasMap,
     dissent,
+    synthesis: synthesis.content,
   } as VerificationResult;
 
   if (params.debug) {
