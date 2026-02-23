@@ -4,6 +4,7 @@ import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
 import { createProvider } from './providers/index.js';
 import { parseConfidence, computeMdi } from './utils.js';
+import { scanForAdversarialPatterns } from './security.js';
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -84,6 +85,10 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     throw new Error(`Input exceeds ${tier} tier limit (${MAX_INPUT_LENGTH[tier as keyof typeof MAX_INPUT_LENGTH]} chars)`);
   }
 
+  // Static adversarial scan — runs BEFORE AI pipeline
+  // Injection patterns can bypass semantic analysis, so we check here first.
+  const adversarialScan = scanForAdversarialPatterns(output);
+
   const genNames = params.providers?.generators || DEFAULT_GEN_NAMES.slice(0, tier === 'pro' ? 4 : 1);
   const criticName = params.providers?.critic || 'anthropic';
   const synthName = params.providers?.synthesizer || 'anthropic';
@@ -153,13 +158,29 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const confidence = parseConfidence(synthesis.content);
 
   const flags: VerificationFlag[] = [];
+
+  // Adversarial pattern detection (static, pre-pipeline)
+  if (adversarialScan.detected) {
+    flags.push('adversarial-pattern');
+    // Append matched pattern names for transparency
+    for (const p of adversarialScan.patterns) {
+      flags.push(`adversarial:${p}`);
+    }
+  }
+
+  // Semantic flags from AI pipeline
   const UNVERIFIED_PATTERN = /\bunverified\b/i;
   if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
   if (balance.warning) flags.push('synthesis-dominance');
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
 
-  const verified = confidence > 0.75 && flags.length === 0 && balance.score > 0.6;
+  // Cap confidence if adversarial patterns detected
+  const finalConfidence = adversarialScan.detected
+    ? Math.min(confidence, adversarialScan.confidence_cap)
+    : confidence;
+
+  const verified = finalConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
 
   const biasMap = balance.generator_coverage.reduce((acc: Record<string, number>, d: { generator: string; share: number }) => {
     acc[d.generator] = d.share;
@@ -168,7 +189,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   const result = {
     verified,
-    confidence,
+    confidence: finalConfidence,
     tier,
     flags,
     timestamp: new Date().toISOString(),
