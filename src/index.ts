@@ -5,3 +5,5 @@ export { deepAnalysis } from './deep.js';
 export { createAttestation } from './attestation.js';
 export { scanForAdversarialPatterns } from './security.js';
 export type { AdversarialScanResult } from './security.js';
+export { formatDivergenceReport } from './divergence.js';
+export type { DivergenceReport, DivergenceLevel } from './divergence.js';
