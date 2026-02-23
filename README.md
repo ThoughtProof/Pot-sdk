@@ -71,10 +71,9 @@ Bring your own API keys. pot-sdk never proxies your requests — everything runs
 
 ## Supported Providers
 
-- Anthropic (Claude)
-- xAI (Grok)
-- DeepSeek
-- Moonshot (Kimi)
+Built-in: Anthropic, OpenAI, xAI, DeepSeek, Moonshot
+
+Any OpenAI-compatible endpoint works via `baseUrl` (Ollama, Together.ai, custom deployments). BYOK — no keys bundled, everything runs on your infrastructure.
 
 ## Learn More
 
