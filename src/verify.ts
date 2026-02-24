@@ -1,9 +1,9 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig } from './types.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
 import { computeDPR } from './metrics/dpr.js';
-import { createProvider } from './providers/index.js';
+import { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
 import { parseConfidence, computeMdi } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
 
@@ -57,12 +57,22 @@ async function runDualSynthesizer(
 
 interface VerifyParams {
   tier?: 'basic' | 'pro';
-  providers?: {
+  /**
+   * v0.2+: Full provider list. SDK assigns roles automatically.
+   * Example:
+   *   providers: [
+   *     { name: 'openai',  model: 'gpt-4o',   apiKey: process.env.OPENAI_API_KEY! },
+   *     { name: 'google',  model: 'gemini-2',  apiKey: process.env.GOOGLE_API_KEY!, baseUrl: 'https://...' },
+   *     { name: 'local',   model: 'llama3',    apiKey: 'ollama', baseUrl: 'http://localhost:11434/v1' },
+   *   ]
+   */
+  providers?: ProviderConfig[] | {
     generators?: string[];
     critic?: string;
     synthesizer?: string;
   };
-  apiKeys: Record<string, string>;
+  /** v0.1 legacy: API keys by provider name. Used when providers is a string-based config. */
+  apiKeys?: Record<string, string>;
   question: string;
   output?: string;
   language?: 'en' | 'de';
@@ -90,44 +100,78 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // Injection patterns can bypass semantic analysis, so we check here first.
   const adversarialScan = scanForAdversarialPatterns(output);
 
-  const genNames = params.providers?.generators || DEFAULT_GEN_NAMES.slice(0, tier === 'pro' ? 4 : 1);
-  const criticName = params.providers?.critic || 'anthropic';
-  const synthName = params.providers?.synthesizer || 'anthropic';
+  // ── v0.2: ProviderConfig[] path ──────────────────────────────────────────
+  const isV2Providers = Array.isArray(params.providers);
 
-  function buildConfig(name: string): GeneratorConfig {
-    const model = DEFAULT_MODELS[name as keyof typeof DEFAULT_MODELS] || DEFAULT_MODELS.anthropic;
-    const apiKey = params.apiKeys[name];
-    if (!apiKey) {
-      throw new Error('Provider configuration invalid');
+  let gensProviders: { provider: ReturnType<typeof createProvider>; model: string }[];
+  let criticProvider: ReturnType<typeof createProvider>;
+  let criticModel: string;
+  let synthProvider: ReturnType<typeof createProvider>;
+  let synthModel: string;
+
+  if (isV2Providers) {
+    const providerList = params.providers as ProviderConfig[];
+    if (providerList.length === 0) {
+      throw new Error('providers array must not be empty');
     }
-    return {
-      name,
-      model,
-      apiKey,
-      ...(name === 'anthropic' ? { provider: 'anthropic' as const } : {}),
-    };
+    const { generators, critic, synthesizer } = assignRoles(providerList);
+
+    gensProviders = generators.map(cfg => ({
+      provider: createProviderFromConfig(cfg),
+      model: cfg.model,
+    }));
+    criticProvider = createProviderFromConfig(critic);
+    criticModel = critic.model;
+    synthProvider = createProviderFromConfig(synthesizer);
+    synthModel = synthesizer.model;
+
+  } else {
+    // ── v0.1 legacy: string-based provider names + apiKeys dict ─────────────
+    const apiKeys = params.apiKeys ?? {};
+    const legacyProviders = params.providers as { generators?: string[]; critic?: string; synthesizer?: string } | undefined;
+    const genNames = legacyProviders?.generators || DEFAULT_GEN_NAMES.slice(0, tier === 'pro' ? 4 : 1);
+    const criticName = legacyProviders?.critic || 'anthropic';
+    const synthName = legacyProviders?.synthesizer || 'anthropic';
+
+    function buildConfig(name: string): GeneratorConfig {
+      const model = DEFAULT_MODELS[name as keyof typeof DEFAULT_MODELS] || DEFAULT_MODELS.anthropic;
+      const apiKey = apiKeys[name];
+      if (!apiKey) {
+        throw new Error('Provider configuration invalid');
+      }
+      return {
+        name,
+        model,
+        apiKey,
+        ...(name === 'anthropic' ? { provider: 'anthropic' as const } : {}),
+      };
+    }
+
+    const genConfigs = genNames.map(buildConfig);
+    gensProviders = genConfigs.map((c) => {
+      const provider = createProvider(c);
+      if ((c as any).apiKey) (c as any).apiKey = undefined;
+      return { provider, model: c.model };
+    });
+
+    const criticConfig = buildConfig(criticName);
+    criticProvider = createProvider(criticConfig);
+    if ((criticConfig as any).apiKey) (criticConfig as any).apiKey = undefined;
+    criticModel = criticConfig.model;
+
+    const synthConfig = buildConfig(synthName);
+    synthProvider = createProvider(synthConfig);
+    if ((synthConfig as any).apiKey) (synthConfig as any).apiKey = undefined;
+    synthModel = synthConfig.model;
   }
 
-  const genConfigs = genNames.map(buildConfig);
-  const gensProviders = genConfigs.map((c) => {
-    const provider = createProvider(c);
-    if ((c as any).apiKey) (c as any).apiKey = undefined;
-    return { provider, model: c.model };
-  });
-
+  // ── Run pipeline ─────────────────────────────────────────────────────────
   let proposals: Proposal[] = await runGenerators(gensProviders, params.question, lang);
   if (output) {
     proposals.push({ model: 'user-output', content: output });
   }
 
-  const criticConfig = buildConfig(criticName);
-  const criticProvider = createProvider(criticConfig);
-  if ((criticConfig as any).apiKey) (criticConfig as any).apiKey = undefined;
-  const critique = await runCritic(criticProvider, criticConfig.model, proposals, lang);
-
-  const synthConfig = buildConfig(synthName);
-  const synthProvider = createProvider(synthConfig);
-  if ((synthConfig as any).apiKey) (synthConfig as any).apiKey = undefined;
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang);
 
   let synthesis: Synthesis;
   let dissent: any = undefined;
@@ -143,14 +187,13 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthesis = primary;
     dissent = verification;
   } else {
-    const synth_model = synthConfig.model;
     if (tier === 'pro') {
       dissent = {
         dual_synthesis: false,
         single_source_warning: "Only one provider available; dual synthesis skipped",
       };
     }
-    synthesis = await runSynthesizer(synthProvider, synth_model, proposals, critique, lang);
+    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critique, lang);
   }
 
   const genProposals = proposals.filter(p => p.model !== 'user-output');

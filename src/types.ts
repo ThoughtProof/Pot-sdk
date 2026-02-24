@@ -6,6 +6,40 @@ export interface GeneratorConfig {
   baseUrl?: string;
 }
 
+/**
+ * User-facing provider configuration for pot-sdk v0.2+.
+ *
+ * Supports any LLM provider:
+ *   - Anthropic: { name: 'anthropic', model: 'claude-3-5-sonnet', apiKey: '...' }
+ *   - OpenAI:    { name: 'openai',    model: 'gpt-4o',            apiKey: '...' }
+ *   - Ollama:    { name: 'local',     model: 'llama3',            apiKey: 'ollama', baseUrl: 'http://localhost:11434/v1' }
+ *   - Any OpenAI-compatible endpoint via baseUrl
+ *
+ * Role assignment (if role is not set explicitly):
+ *   1 provider  → generator + critic + synthesizer (same model)
+ *   2 providers → [0]=generator+critic, [1]=synthesizer
+ *   3+ providers → all except last two = generators, second-to-last = critic, last = synthesizer
+ */
+export interface ProviderConfig {
+  /** Human-readable name / label (e.g. 'openai', 'my-llama', 'anthropic') */
+  name: string;
+  /** Model identifier as accepted by the provider API */
+  model: string;
+  /** API key. Use 'ollama' or 'local' for unauthenticated local endpoints. */
+  apiKey: string;
+  /**
+   * Base URL for OpenAI-compatible APIs.
+   * Omit for Anthropic (handled natively) and built-in providers.
+   * Example: 'http://localhost:11434/v1' for Ollama
+   */
+  baseUrl?: string;
+  /**
+   * Explicit role assignment. If omitted, roles are assigned automatically
+   * based on position in the providers array.
+   */
+  role?: 'generator' | 'critic' | 'synthesizer' | 'any';
+}
+
 export interface VerifyOptions {
   tier: 'basic' | 'pro';
   generators: GeneratorConfig[];

@@ -1,6 +1,6 @@
 {
   "name": "pot-sdk",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Proof of Thought SDK - Multi-model verification for AI outputs",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
