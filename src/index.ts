@@ -11,3 +11,5 @@ export { computeDPR } from './metrics/dpr.js';
 export type { DPRResult } from './metrics/dpr.js';
 export { signSchema, verifySchema } from './schema.js';
 export type { SchemaSignature, SchemaVerifyResult } from './schema.js';
+export { runSandboxCheck, extractCodeBlocks } from './sandbox.js';
+export type { SandboxCheckResult, SandboxAttestation } from './sandbox.js';

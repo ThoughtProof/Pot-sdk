@@ -6,6 +6,7 @@ import { computeDPR } from './metrics/dpr.js';
 import { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
 import { parseConfidence, computeMdi } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
+import { runSandboxCheck } from './sandbox.js';
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -77,6 +78,12 @@ interface VerifyParams {
   output?: string;
   language?: 'en' | 'de';
   debug?: boolean;
+  /**
+   * Enable WASM sandbox check (Layer 4). Requires `pot-sandbox` to be installed.
+   * Extracts code blocks from output and runs them in QuickJS-WASM isolation.
+   * Adds `sandbox:*` flags to the result if escape attempts or errors are detected.
+   */
+  sandbox?: boolean;
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -99,6 +106,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // Static adversarial scan — runs BEFORE AI pipeline
   // Injection patterns can bypass semantic analysis, so we check here first.
   const adversarialScan = scanForAdversarialPatterns(output);
+
+  // WASM sandbox check — runs in parallel with pipeline (opt-in via params.sandbox)
+  const sandboxPromise = params.sandbox
+    ? runSandboxCheck(output)
+    : Promise.resolve(null);
 
   // ── v0.2: ProviderConfig[] path ──────────────────────────────────────────
   const isV2Providers = Array.isArray(params.providers);
@@ -221,6 +233,12 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
 
+  // Collect WASM sandbox result (was running in parallel with pipeline)
+  const sandboxResult = await sandboxPromise;
+  if (sandboxResult?.flags && sandboxResult.flags.length > 0) {
+    flags.push(...sandboxResult.flags);
+  }
+
   // Cap confidence if adversarial patterns detected
   const finalConfidence = adversarialScan.detected
     ? Math.min(confidence, adversarialScan.confidence_cap)
@@ -245,6 +263,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     biasMap,
     dissent,
     synthesis: synthesis.content,
+    ...(sandboxResult ? { sandbox: sandboxResult } : {}),
   } as VerificationResult;
 
   if (params.debug) {

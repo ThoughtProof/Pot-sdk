@@ -55,6 +55,8 @@ export interface VerificationResult {
   tier: 'basic' | 'pro';
   flags: string[];
   timestamp: string;
+  /** Present when verify() was called with sandbox:true and pot-sandbox is installed */
+  sandbox?: import('./sandbox.js').SandboxCheckResult;
   mdi?: number;
   sas?: number;
   dpr?: { score: number; total_objections: number; preserved: number; false_consensus: boolean; objection_keywords: string[] };
