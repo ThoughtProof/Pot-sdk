@@ -7,3 +7,5 @@ export { scanForAdversarialPatterns } from './security.js';
 export type { AdversarialScanResult } from './security.js';
 export { formatDivergenceReport } from './divergence.js';
 export type { DivergenceReport, DivergenceLevel } from './divergence.js';
+export { computeDPR } from './metrics/dpr.js';
+export type { DPRResult } from './metrics/dpr.js';

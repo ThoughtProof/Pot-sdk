@@ -2,6 +2,7 @@ import type { VerificationResult, Proposal, Synthesis, VerificationFlag, Generat
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
+import { computeDPR } from './metrics/dpr.js';
 import { createProvider } from './providers/index.js';
 import { parseConfidence, computeMdi } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
@@ -156,6 +157,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const balance = computeSynthesisBalance(genProposals, synthesis.content);
   const mdi = computeMdi(genProposals);
   const confidence = parseConfidence(synthesis.content);
+  const dpr = computeDPR(critique.content, synthesis.content, balance.warning);
 
   const flags: VerificationFlag[] = [];
 
@@ -172,6 +174,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const UNVERIFIED_PATTERN = /\bunverified\b/i;
   if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
   if (balance.warning) flags.push('synthesis-dominance');
+  if (dpr.false_consensus) flags.push('false-consensus');
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
 
@@ -195,6 +198,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     timestamp: new Date().toISOString(),
     mdi: parseFloat(mdi.toFixed(3)),
     sas: balance.score,
+    dpr,
     biasMap,
     dissent,
     synthesis: synthesis.content,

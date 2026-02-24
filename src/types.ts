@@ -23,6 +23,7 @@ export interface VerificationResult {
   timestamp: string;
   mdi?: number;
   sas?: number;
+  dpr?: { score: number; total_objections: number; preserved: number; false_consensus: boolean; objection_keywords: string[] };
   biasMap?: Record<string, number>;
   dissent?: any;
   synthesis?: string;
