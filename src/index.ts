@@ -9,3 +9,5 @@ export { formatDivergenceReport } from './divergence.js';
 export type { DivergenceReport, DivergenceLevel } from './divergence.js';
 export { computeDPR } from './metrics/dpr.js';
 export type { DPRResult } from './metrics/dpr.js';
+export { signSchema, verifySchema } from './schema.js';
+export type { SchemaSignature, SchemaVerifyResult } from './schema.js';
