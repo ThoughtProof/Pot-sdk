@@ -1,3 +1,74 @@
+// ── A2A Verification Credential Types (v0.3) ──────────────────────────────
+
+export type Verdict = 'VERIFIED' | 'UNVERIFIED' | 'UNCERTAIN' | 'DISSENT';
+
+export type VerificationMode = 'basic' | 'standard' | 'deep';
+
+export interface DPRResult {
+  score: number;
+  total_objections: number;
+  preserved: number;
+  false_consensus: boolean;
+  objection_keywords: string[];
+}
+
+export interface TPVerificationCredential {
+  '@context': string;
+  type: 'VerificationCredential';
+  tp_version: string;
+  id: string;
+  issued_at: string;
+  expires_at: string | null;
+
+  issuer: {
+    id: string;
+    sdk_version: string;
+    pipeline: string;
+    unaudited: boolean;
+  };
+
+  subject: {
+    claim_hash: string;
+    claim_preview: string;
+    type: string;
+    request_id: string;
+  };
+
+  result: {
+    verdict: Verdict;
+    confidence: number;
+    consensus_threshold: number;
+    consensus_reached: boolean;
+    metrics: {
+      mdi: number;
+      sas: number;
+      dpr: DPRResult;
+    };
+    synthesis: string;
+    dissent: Array<{ position: string; weight: number }>;
+    adversarial_patterns_detected: string[];
+    false_consensus_flag: boolean;
+  };
+
+  pipeline: {
+    mode: VerificationMode;
+    generators: string[];
+    critic: string;
+    synthesizer: string;
+    rounds: number;
+    duration_ms: number;
+  };
+
+  proof: {
+    type: string;
+    algorithm: string;
+    hash: string;
+    signed_at: string;
+  };
+}
+
+// ── Legacy / Core Types ────────────────────────────────────────────────────
+
 export interface GeneratorConfig {
   name: string;
   model: string;
@@ -50,8 +121,12 @@ export interface VerifyOptions {
 }
 
 export interface VerificationResult {
+  /** @deprecated Use `verdict` instead. Kept for backward compatibility. */
   verified: boolean;
+  /** v0.3+: Structured verdict enum */
+  verdict: Verdict;
   confidence: number;
+  /** @deprecated Use `pipeline.mode` instead. */
   tier: 'basic' | 'pro';
   flags: string[];
   timestamp: string;
@@ -59,10 +134,19 @@ export interface VerificationResult {
   sandbox?: import('./sandbox.js').SandboxCheckResult;
   mdi?: number;
   sas?: number;
-  dpr?: { score: number; total_objections: number; preserved: number; false_consensus: boolean; objection_keywords: string[] };
+  dpr?: DPRResult;
   biasMap?: Record<string, number>;
   dissent?: any;
   synthesis?: string;
+  /** v0.3+: Pipeline execution details */
+  pipeline?: {
+    mode: VerificationMode;
+    generators: string[];
+    critic: string;
+    synthesizer: string;
+    rounds: number;
+    duration_ms: number;
+  };
   raw?: {
     proposals: Proposal[];
     critique: Critique;

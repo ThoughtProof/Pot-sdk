@@ -40,13 +40,14 @@ export interface SchemaVerifyResult {
   status: 'clean' | 'drifted' | 'invalid-signature';
 }
 
-const SDK_VERSION = '0.1.4';
+const SDK_VERSION = '0.3.0';
 
 /**
  * Canonicalize any value to a stable JSON string.
  * Keys are sorted recursively to ensure determinism.
+ * Exported for use by attestation.ts and credential.ts (v0.3+).
  */
-function canonicalize(value: unknown): string {
+export function canonicalize(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
   }

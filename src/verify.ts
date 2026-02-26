@@ -1,4 +1,4 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode } from './types.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
@@ -57,31 +57,35 @@ async function runDualSynthesizer(
 }
 
 interface VerifyParams {
+  /** @deprecated Use `mode` instead. Kept for backward compat. */
   tier?: 'basic' | 'pro';
   /**
+   * v0.3+: Verification mode.
+   *   - basic: 1 generator + 1 critic, <30s
+   *   - standard: 3+ generators + 1 critic, 1 round, 1-3 min
+   *   - deep: 3+ generators + 1 critic, 2 rounds, 5-15 min
+   * Takes precedence over `tier`. If omitted, falls back to `tier`.
+   */
+  mode?: VerificationMode;
+  /**
    * v0.2+: Full provider list. SDK assigns roles automatically.
-   * Example:
-   *   providers: [
-   *     { name: 'openai',  model: 'gpt-4o',   apiKey: process.env.OPENAI_API_KEY! },
-   *     { name: 'google',  model: 'gemini-2',  apiKey: process.env.GOOGLE_API_KEY!, baseUrl: 'https://...' },
-   *     { name: 'local',   model: 'llama3',    apiKey: 'ollama', baseUrl: 'http://localhost:11434/v1' },
-   *   ]
    */
   providers?: ProviderConfig[] | {
     generators?: string[];
     critic?: string;
     synthesizer?: string;
   };
-  /** v0.1 legacy: API keys by provider name. Used when providers is a string-based config. */
+  /** v0.1 legacy: API keys by provider name. */
   apiKeys?: Record<string, string>;
-  question: string;
+  /** @deprecated Use `claim` instead. */
+  question?: string;
+  /** v0.3+: The claim or content to verify. Alias for `question`. */
+  claim?: string;
   output?: string;
   language?: 'en' | 'de';
   debug?: boolean;
   /**
    * Enable WASM sandbox check (Layer 4). Requires `pot-sandbox` to be installed.
-   * Extracts code blocks from output and runs them in QuickJS-WASM isolation.
-   * Adds `sandbox:*` flags to the result if escape attempts or errors are detected.
    */
   sandbox?: boolean;
 }
@@ -95,12 +99,24 @@ const DEFAULT_MODELS: Record<string, string> = {
 };
 
 export async function verify(output: string, params: VerifyParams): Promise<VerificationResult> {
-  const tier = params.tier || 'basic';
+  const startTime = Date.now();
+
+  // v0.3: mode takes precedence over tier
+  const mode: VerificationMode = params.mode || (params.tier === 'pro' ? 'standard' : params.tier as VerificationMode) || 'basic';
+  // Map mode back to legacy tier for backward compat
+  const tier = mode === 'basic' ? 'basic' : 'pro';
   const lang = params.language || 'en';
 
-  const MAX_INPUT_LENGTH = { basic: 2000, pro: 8000, deep: 32000 };
-  if (params.question.length > MAX_INPUT_LENGTH[tier as keyof typeof MAX_INPUT_LENGTH]) {
-    throw new Error(`Input exceeds ${tier} tier limit (${MAX_INPUT_LENGTH[tier as keyof typeof MAX_INPUT_LENGTH]} chars)`);
+  // v0.3: claim alias for question
+  const question = params.claim || params.question;
+  if (!question) {
+    throw new Error('Either `claim` or `question` must be provided');
+  }
+
+  const MAX_INPUT_LENGTH = { basic: 2000, standard: 8000, deep: 32000 };
+  const maxLen = MAX_INPUT_LENGTH[mode] || MAX_INPUT_LENGTH.standard;
+  if (question.length > maxLen) {
+    throw new Error(`Input exceeds ${mode} mode limit (${maxLen} chars)`);
   }
 
   // Static adversarial scan — runs BEFORE AI pipeline
@@ -141,7 +157,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     // ── v0.1 legacy: string-based provider names + apiKeys dict ─────────────
     const apiKeys = params.apiKeys ?? {};
     const legacyProviders = params.providers as { generators?: string[]; critic?: string; synthesizer?: string } | undefined;
-    const genNames = legacyProviders?.generators || DEFAULT_GEN_NAMES.slice(0, tier === 'pro' ? 4 : 1);
+    const genNames = legacyProviders?.generators || DEFAULT_GEN_NAMES.slice(0, mode !== 'basic' ? 4 : 1);
     const criticName = legacyProviders?.critic || 'anthropic';
     const synthName = legacyProviders?.synthesizer || 'anthropic';
 
@@ -177,8 +193,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthModel = synthConfig.model;
   }
 
+  // ── Track model names for pipeline info ───────────────────────────────────
+  const generatorModelNames = gensProviders.map(g => g.model);
+
   // ── Run pipeline ─────────────────────────────────────────────────────────
-  let proposals: Proposal[] = await runGenerators(gensProviders, params.question, lang);
+  let proposals: Proposal[] = await runGenerators(gensProviders, question, lang);
   if (output) {
     proposals.push({ model: 'user-output', content: output });
   }
@@ -188,7 +207,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   let synthesis: Synthesis;
   let dissent: any = undefined;
 
-  if (tier === 'pro' && gensProviders.length >= 2) {
+  if (mode !== 'basic' && gensProviders.length >= 2) {
     const synth1 = gensProviders[0];
     const synth2 = gensProviders[1];
     const { primary, verification } = await runDualSynthesizer(
@@ -199,7 +218,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthesis = primary;
     dissent = verification;
   } else {
-    if (tier === 'pro') {
+    if (mode !== 'basic') {
       dissent = {
         dual_synthesis: false,
         single_source_warning: "Only one provider available; dual synthesis skipped",
@@ -246,6 +265,20 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   const verified = finalConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
 
+  // v0.3: Compute verdict enum
+  let verdict: Verdict;
+  if (dpr.false_consensus && finalConfidence >= 0.70) {
+    verdict = 'DISSENT';
+  } else if (finalConfidence >= 0.70 && flags.length === 0 && balance.score > 0.6) {
+    verdict = 'VERIFIED';
+  } else if (finalConfidence >= 0.70) {
+    verdict = 'UNVERIFIED';
+  } else {
+    verdict = 'UNCERTAIN';
+  }
+
+  const durationMs = Date.now() - startTime;
+
   const biasMap = balance.generator_coverage.reduce((acc: Record<string, number>, d: { generator: string; share: number }) => {
     acc[d.generator] = d.share;
     return acc;
@@ -253,6 +286,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   const result = {
     verified,
+    verdict,
     confidence: finalConfidence,
     tier,
     flags,
@@ -263,6 +297,14 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     biasMap,
     dissent,
     synthesis: synthesis.content,
+    pipeline: {
+      mode,
+      generators: generatorModelNames,
+      critic: criticModel,
+      synthesizer: synthModel,
+      rounds: mode === 'deep' ? 2 : 1,
+      duration_ms: durationMs,
+    },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
   } as VerificationResult;
 
