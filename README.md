@@ -1,11 +1,11 @@
 # pot-sdk
 
-> **Proof of Thought SDK** — Multi-model verification for AI outputs
+> **ThoughtProof SDK** — Multi-model verification for AI outputs
 
 [![npm version](https://img.shields.io/npm/v/pot-sdk)](https://www.npmjs.com/package/pot-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-The TypeScript/JavaScript SDK for the [Proof of Thought Protocol](https://thoughtproof.ai). Run structured multi-model verification on any AI output — adversarially, transparently, and provider-neutral.
+The TypeScript/JavaScript SDK for the [ThoughtProof Protocol](https://thoughtproof.ai). Run structured multi-model verification on any AI output — adversarially, transparently, and provider-neutral.
 
 ## Why?
 
@@ -83,4 +83,4 @@ Any OpenAI-compatible endpoint works via `baseUrl` (Ollama, Together.ai, custom 
 
 ---
 
-Built with the [Proof of Thought Protocol](https://thoughtproof.ai). MIT License.
+Built with the [ThoughtProof Protocol](https://thoughtproof.ai). MIT License.

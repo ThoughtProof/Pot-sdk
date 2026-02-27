@@ -2,7 +2,7 @@
 
 ## Overview
 
-TypeScript SDK for the Proof of Thought (PoT) epistemic verification protocol.
+TypeScript SDK for the ThoughtProof Protocol (PoT) epistemic verification protocol.
 Enables AI agents to verify other agents' outputs programmatically.
 
 ## Core API
