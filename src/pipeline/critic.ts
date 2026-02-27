@@ -1,5 +1,6 @@
-import type { Provider, Proposal, Critique } from '../types.js';
+import type { Provider, Proposal, Critique, CriticMode } from '../types.js';
 
+// ── Adversarial Mode: "Find every flaw" ────────────────────────────────────
 const CRITIC_PROMPT_DE = `Du bist ein brutaler Red-Team Analyst und Fakten-Checker. Deine Aufgabe: Finde ALLE Schwächen in diesen Proposals.
 
 {context}
@@ -54,18 +55,137 @@ Be ruthless but fair. The goal is epistemic honesty, not destruction.
 PROPOSALS:
 {proposals}`;
 
+// ── Resistant Mode: "Verify claims require evidence" ───────────────────────
+const RESISTANT_PROMPT_DE = `Du bist ein skeptischer aber fairer Gutachter. Deine Aufgabe: Prüfe ob jede Behauptung ausreichend belegt ist.
+
+{context}
+
+REGELN:
+- Bewerte jedes Proposal mit Score 1-10
+
+EVIDENZ-PRÜFUNG:
+- Für JEDE faktische Behauptung: Ist eine Quelle oder Begründung angegeben?
+- Behauptungen ohne Evidenz markieren als "UNBELEGT: [Behauptung]"
+- Statistiken und Zahlen die plausibel klingen aber nicht belegt sind: "UNBELEGT"
+- Bewerte die Qualität der angegebenen Quellen (primär vs. sekundär, aktuell vs. veraltet)
+
+KOHÄRENZ-PRÜFUNG:
+- Folgen die Schlussfolgerungen logisch aus den Prämissen?
+- Gibt es Sprünge in der Argumentation?
+- Sind Annahmen explizit gemacht oder versteckt?
+
+KONSENS-PRÜFUNG:
+- Wo stimmen die Proposals überein? Ist die Übereinstimmung begründet oder zufällig?
+- Wo widersprechen sie sich? Welche Position hat stärkere Evidenz?
+
+Sei skeptisch aber konstruktiv. Das Ziel ist Evidenz-basierte Bewertung, nicht Widerlegung.
+
+PROPOSALS:
+{proposals}`;
+
+const RESISTANT_PROMPT_EN = `You are a skeptical but fair reviewer. Your task: Check whether each claim has sufficient evidence.
+
+{context}
+
+RULES:
+- Rate each proposal with score 1-10
+
+EVIDENCE CHECK:
+- For EVERY factual claim: Is a source or justification provided?
+- Flag claims without evidence as "UNSUPPORTED: [claim]"
+- Statistics and numbers that sound plausible but lack backing: "UNSUPPORTED"
+- Assess the quality of cited sources (primary vs. secondary, current vs. outdated)
+
+COHERENCE CHECK:
+- Do conclusions follow logically from premises?
+- Are there leaps in reasoning?
+- Are assumptions made explicit or hidden?
+
+CONSENSUS CHECK:
+- Where do proposals agree? Is the agreement grounded or coincidental?
+- Where do they disagree? Which position has stronger evidence?
+
+Be skeptical but constructive. The goal is evidence-based evaluation, not refutation.
+
+PROPOSALS:
+{proposals}`;
+
+// ── Balanced Mode: Adversarial on facts, resistant on logic ────────────────
+const BALANCED_PROMPT_DE = `Du bist ein erfahrener Peer-Reviewer. Deine Aufgabe hat zwei Teile:
+1. FAKTEN: Sei aggressiv — verifiziere JEDE Zahl, Statistik und Quelle. Markiere Unbestätigtes als "UNVERIFIZIERT".
+2. LOGIK: Sei fair — prüfe ob die Argumentation kohärent ist und Schlussfolgerungen aus den Belegen folgen.
+
+{context}
+
+REGELN:
+- Bewerte jedes Proposal mit Score 1-10
+
+FAKTEN-VERIFIZIERUNG (AGGRESSIV):
+- Verifiziere JEDE spezifische Behauptung, Statistik, jedes Datum und Zitat
+- Markiere was du nicht bestätigen kannst als "UNVERIFIZIERT: [Behauptung]"
+- Halluzinierte Zitate aufdecken
+
+LOGIK-PRÜFUNG (FAIR):
+- Folgen Schlussfolgerungen aus den Prämissen?
+- Sind Annahmen explizit?
+- Fehlende Perspektiven identifizieren
+
+DISSENS-ANALYSE:
+- Widersprüche zwischen Proposals sind SIGNAL
+- Konsens trotz schwacher Evidenz markieren
+
+PROPOSALS:
+{proposals}`;
+
+const BALANCED_PROMPT_EN = `You are an experienced peer reviewer. Your task has two parts:
+1. FACTS: Be aggressive — verify EVERY number, statistic, and source. Flag unconfirmed as "UNVERIFIED".
+2. LOGIC: Be fair — check whether reasoning is coherent and conclusions follow from evidence.
+
+{context}
+
+RULES:
+- Rate each proposal with score 1-10
+
+FACTUAL VERIFICATION (AGGRESSIVE):
+- Verify EVERY specific claim, statistic, date, and citation
+- Flag what you cannot confirm as "UNVERIFIED: [claim]"
+- Expose hallucinated citations
+
+LOGIC CHECK (FAIR):
+- Do conclusions follow from premises?
+- Are assumptions explicit?
+- Identify missing perspectives
+
+DISAGREEMENT ANALYSIS:
+- Contradictions between proposals are SIGNAL
+- Flag consensus despite weak evidence
+
+PROPOSALS:
+{proposals}`;
+
+// ── Prompt selection by mode and language ───────────────────────────────────
+function selectCriticPrompt(criticMode: CriticMode, language: 'de' | 'en'): string {
+  const prompts: Record<CriticMode, Record<'de' | 'en', string>> = {
+    adversarial: { de: CRITIC_PROMPT_DE, en: CRITIC_PROMPT_EN },
+    resistant:   { de: RESISTANT_PROMPT_DE, en: RESISTANT_PROMPT_EN },
+    balanced:    { de: BALANCED_PROMPT_DE, en: BALANCED_PROMPT_EN },
+  };
+  return prompts[criticMode][language];
+}
+
 export async function runCritic(
   provider: Provider,
   model: string,
   proposals: Proposal[],
   language: 'de' | 'en' = 'de',
   dryRun: boolean = false,
-  contextText?: string
+  contextText?: string,
+  criticMode: CriticMode = 'adversarial'
 ): Promise<Critique> {
   if (dryRun) {
     return {
       model: model.split('/').pop() || model,
-      content: `[DRY-RUN] Simulated critique from ${model}\\n\\nProposal 1: Score 7/10 - Good analysis but lacks...\\nProposal 2: Score 8/10 - Strong points, however...\\nProposal 3: Score 6/10 - Weak on...`,
+      content: `[DRY-RUN] Simulated critique from ${model} (mode: ${criticMode})\\n\\nProposal 1: Score 7/10 - Good analysis but lacks...\\nProposal 2: Score 8/10 - Strong points, however...\\nProposal 3: Score 6/10 - Weak on...`,
     };
   }
 
@@ -73,7 +193,7 @@ export async function runCritic(
     .map((p, i) => `\\n=== PROPOSAL ${i + 1} (${p.model}) ===\\n${p.content}`)
     .join('\\n\\n');
 
-  const template = language === 'de' ? CRITIC_PROMPT_DE : CRITIC_PROMPT_EN;
+  const template = selectCriticPrompt(criticMode, language);
   const contextSection = contextText || '';
   const prompt = template
     .replace('{context}', contextSection)

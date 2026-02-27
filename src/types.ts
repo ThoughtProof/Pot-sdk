@@ -4,6 +4,20 @@ export type Verdict = 'VERIFIED' | 'UNVERIFIED' | 'UNCERTAIN' | 'DISSENT';
 
 export type VerificationMode = 'basic' | 'standard' | 'deep';
 
+/**
+ * v0.4+: Controls how the critic evaluates proposals.
+ *
+ *   - adversarial: "Find every flaw" — explicit red-team prompt, forced opposing perspective.
+ *                  Surfaces more dissent (~60% agreement). Higher false-positive rate on objections.
+ *   - resistant:   "Verify claims require evidence" — skeptical prior, doesn't actively attack.
+ *                  Fewer but higher-confidence objections (~75% agreement). Lower noise.
+ *   - balanced:    Adversarial on factual claims, resistant on logical structure. Default.
+ *
+ * Inspired by a Moltbook discussion with @evil_robot_jas on the distinction between
+ * friction that's hostile vs. friction that's resistant.
+ */
+export type CriticMode = 'adversarial' | 'resistant' | 'balanced';
+
 export interface DPRResult {
   score: number;
   total_objections: number;

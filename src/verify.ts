@@ -1,4 +1,4 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode } from './types.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
@@ -88,6 +88,15 @@ interface VerifyParams {
    * Enable WASM sandbox check (Layer 4). Requires `pot-sandbox` to be installed.
    */
   sandbox?: boolean;
+  /**
+   * v0.4+: Controls how the critic evaluates proposals.
+   *   - adversarial: "Find every flaw" — explicit red-team, highest dissent surfacing
+   *   - resistant: "Verify evidence exists" — skeptical prior, fewer false positives
+   *   - balanced: Adversarial on facts, resistant on logic (default)
+   *
+   * If omitted, defaults to 'adversarial' (backward compatible with v0.3 behavior).
+   */
+  criticMode?: CriticMode;
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -202,7 +211,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     proposals.push({ model: 'user-output', content: output });
   }
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang);
+  const criticMode: CriticMode = params.criticMode || 'adversarial';
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, criticMode);
 
   let synthesis: Synthesis;
   let dissent: any = undefined;
