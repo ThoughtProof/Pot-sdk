@@ -1,5 +1,5 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection } from './types.js';
-import { DOMAIN_PROFILES } from './domains.js';
+import { DOMAIN_PROFILES, checkToxicCombination } from './domains.js';
 import type { DomainConfig } from './domains.js';
 import { parseClassifiedObjections } from './pipeline/critic.js';
 import { runGenerators } from './pipeline/generator.js';
@@ -237,6 +237,9 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const receptiveMode = params.receptiveMode ?? domainConfig?.receptiveMode;
   const outputFormat = params.outputFormat ?? 'human';
 
+  // v0.5.1: Toxic combination warning (insight from @evil_robot_jas)
+  const toxicWarning = receptiveMode ? checkToxicCombination(criticMode, receptiveMode) : null;
+
   const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, criticMode, { requireCitation, classifyObjections });
 
   let synthesis: Synthesis;
@@ -287,6 +290,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (dpr.false_consensus) flags.push('false-consensus');
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
+  if (toxicWarning) flags.push('toxic-combination');
 
   // Collect WASM sandbox result (was running in parallel with pipeline)
   const sandboxResult = await sandboxPromise;

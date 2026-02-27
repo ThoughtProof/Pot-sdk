@@ -9,6 +9,21 @@ export interface DomainConfig {
   description: string;
 }
 
+/**
+ * Toxic combinations warning (insight from @evil_robot_jas):
+ * adversarial critic + defensive generator = opacity. The system learns to hide
+ * reasoning rather than improve it. "A hostile critic in a creative loop doesn't
+ * just kill flow, it teaches the system to hide its reasoning instead of sharpen it."
+ */
+export const TOXIC_COMBINATIONS: Array<{ criticMode: CriticMode; receptiveMode: ReceptiveMode; warning: string }> = [
+  { criticMode: 'adversarial', receptiveMode: 'defensive', warning: 'adversarial + defensive may produce opacity: generator learns to hide reasoning instead of improving it' },
+];
+
+export function checkToxicCombination(criticMode: CriticMode, receptiveMode: ReceptiveMode): string | null {
+  const match = TOXIC_COMBINATIONS.find(t => t.criticMode === criticMode && t.receptiveMode === receptiveMode);
+  return match?.warning ?? null;
+}
+
 export const DOMAIN_PROFILES: Record<DomainProfile, DomainConfig> = {
   medical: {
     criticMode: 'adversarial',
