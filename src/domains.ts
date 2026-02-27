@@ -24,6 +24,63 @@ export function checkToxicCombination(criticMode: CriticMode, receptiveMode: Rec
   return match?.warning ?? null;
 }
 
+/**
+ * Domain severity ordering for lockfile ratchet (inspired by @evil_robot_jas):
+ * "If the same team that wrote the claim configures the domain, you've got a
+ * conflict of interest baked into the pipeline."
+ * 
+ * Solution: domain lockfiles. Projects declare domain once in pot.config.json.
+ * Individual verify() calls can ESCALATE (creative → medical) but cannot
+ * DOWNGRADE (medical → creative). Ratchet, not slider.
+ */
+const DOMAIN_SEVERITY: Record<DomainProfile, number> = {
+  creative: 1,
+  general: 2,
+  code: 3,
+  financial: 4,
+  legal: 5,
+  medical: 6,
+};
+
+export interface DomainLockfile {
+  domain: DomainProfile;
+  locked: boolean;
+  lockedAt?: string;
+  lockedBy?: string;
+}
+
+/**
+ * Validate domain escalation. Returns the effective domain.
+ * If lockfile domain is set, requested domain can only escalate (higher severity), never downgrade.
+ */
+export function resolveDomain(requested: DomainProfile | undefined, lockfile: DomainLockfile | undefined): DomainProfile {
+  if (!lockfile || !lockfile.locked) {
+    return requested || 'general';
+  }
+
+  if (!requested) {
+    return lockfile.domain;
+  }
+
+  const lockSeverity = DOMAIN_SEVERITY[lockfile.domain];
+  const requestSeverity = DOMAIN_SEVERITY[requested];
+
+  if (requestSeverity < lockSeverity) {
+    // Downgrade attempt — enforce lockfile
+    return lockfile.domain;
+  }
+
+  // Escalation allowed
+  return requested;
+}
+
+/**
+ * Check if a domain change would be a downgrade (blocked by lockfile).
+ */
+export function isDomainDowngrade(from: DomainProfile, to: DomainProfile): boolean {
+  return DOMAIN_SEVERITY[to] < DOMAIN_SEVERITY[from];
+}
+
 export const DOMAIN_PROFILES: Record<DomainProfile, DomainConfig> = {
   medical: {
     criticMode: 'adversarial',

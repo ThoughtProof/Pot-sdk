@@ -1,6 +1,6 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection } from './types.js';
-import { DOMAIN_PROFILES, checkToxicCombination } from './domains.js';
-import type { DomainConfig } from './domains.js';
+import { DOMAIN_PROFILES, checkToxicCombination, resolveDomain } from './domains.js';
+import type { DomainConfig, DomainLockfile } from './domains.js';
 import { parseClassifiedObjections } from './pipeline/critic.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
@@ -111,6 +111,8 @@ interface VerifyParams {
   outputFormat?: OutputFormat;
   /** v0.5+: How the synthesizer receives critique */
   receptiveMode?: ReceptiveMode;
+  /** v0.5.1+: Domain lockfile — enforces minimum domain severity. Ratchet, not slider. (inspired by @evil_robot_jas) */
+  domainLockfile?: DomainLockfile;
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -226,9 +228,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   }
 
   // v0.5: Domain profile defaults
+  // v0.5.1: Domain lockfile — resolve effective domain (ratchet, not slider)
+  const effectiveDomain = resolveDomain(params.domain, params.domainLockfile);
   let domainConfig: DomainConfig | undefined;
-  if (params.domain) {
-    domainConfig = DOMAIN_PROFILES[params.domain];
+  if (effectiveDomain) {
+    domainConfig = DOMAIN_PROFILES[effectiveDomain];
   }
 
   const criticMode: CriticMode = params.criticMode || domainConfig?.criticMode || 'adversarial';
@@ -356,7 +360,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
     ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
-    ...(params.domain ? { domain: params.domain } : {}),
+    ...(effectiveDomain ? { domain: effectiveDomain } : {}),
     ...(outputFormat !== 'human' ? { outputFormat } : {}),
   } as VerificationResult;
 

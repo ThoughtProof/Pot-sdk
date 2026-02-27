@@ -1,6 +1,6 @@
 export * from './types.js';
-export { DOMAIN_PROFILES } from './domains.js';
-export type { DomainConfig } from './domains.js';
+export { DOMAIN_PROFILES, resolveDomain, isDomainDowngrade } from './domains.js';
+export type { DomainConfig, DomainLockfile } from './domains.js';
 export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity } from './types.js';
 export * from './verify.js';
 export { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
