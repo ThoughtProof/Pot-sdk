@@ -201,7 +201,11 @@ export async function runCritic(
     .replace('{proposals}', proposalsText);
 
   if (options?.requireCitation) {
-    prompt += '\n\nCITATION REQUIREMENT: For EVERY objection, you MUST quote the exact text from the proposal. Format: CITE: "[exact quote]" → OBJECTION: [your objection]. Objections without citations will be discarded.';
+    prompt += `\n\nCITATION REQUIREMENT: For EVERY objection, you MUST cite the source text from the proposal.
+For explicit claims, quote the exact text: CITE: "[exact quote]" → OBJECTION: [your objection]
+For implicit claims spanning multiple passages: CITE-RANGE: "[summary of implicit claim from paragraphs X-Y]" → OBJECTION: [your objection]
+For unstated assumptions: CITE-IMPLICIT: "[the unstated assumption you identified]" → OBJECTION: [your objection]
+Objections without any citation format will be discarded.`;
   }
   if (options?.classifyObjections) {
     prompt += '\n\nCLASSIFICATION REQUIREMENT: For EVERY objection, classify it.\nFormat: [TYPE:factual|SEVERITY:critical] OBJECTION: [description]\nTypes: factual, logical, stylistic, evidential\nSeverities: critical, moderate, minor';
@@ -220,13 +224,18 @@ export function parseClassifiedObjections(critiqueContent: string): ClassifiedOb
   const results: ClassifiedObjection[] = [];
   let match;
   while ((match = pattern.exec(critiqueContent)) !== null) {
-    const citeMatch = critiqueContent.slice(Math.max(0, match.index - 200), match.index).match(/CITE:\s*"([^"]+)"/);
+    // Support three citation formats: exact, range, and implicit (v0.5.1, inspired by @thoth-ix)
+    const lookback = critiqueContent.slice(Math.max(0, match.index - 300), match.index);
+    const citeExact = lookback.match(/CITE:\s*"([^"]+)"/);
+    const citeRange = lookback.match(/CITE-RANGE:\s*"([^"]+)"/);
+    const citeImplicit = lookback.match(/CITE-IMPLICIT:\s*"([^"]+)"/);
+    const cited = citeExact?.[1] || citeRange?.[1] || citeImplicit?.[1];
     results.push({
       claim: match[3].trim().slice(0, 100),
       type: match[1] as ObjectionType,
       severity: match[2] as ObjectionSeverity,
       explanation: match[3].trim(),
-      ...(citeMatch ? { cited_text: citeMatch[1] } : {}),
+      ...(cited ? { cited_text: cited } : {}),
     });
   }
   return results;
