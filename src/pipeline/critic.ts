@@ -1,4 +1,4 @@
-import type { Provider, Proposal, Critique, CriticMode } from '../types.js';
+import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity } from '../types.js';
 
 // ── Adversarial Mode: "Find every flaw" ────────────────────────────────────
 const CRITIC_PROMPT_DE = `Du bist ein brutaler Red-Team Analyst und Fakten-Checker. Deine Aufgabe: Finde ALLE Schwächen in diesen Proposals.
@@ -180,7 +180,8 @@ export async function runCritic(
   language: 'de' | 'en' = 'de',
   dryRun: boolean = false,
   contextText?: string,
-  criticMode: CriticMode = 'adversarial'
+  criticMode: CriticMode = 'adversarial',
+  options?: { requireCitation?: boolean; classifyObjections?: boolean }
 ): Promise<Critique> {
   if (dryRun) {
     return {
@@ -195,9 +196,16 @@ export async function runCritic(
 
   const template = selectCriticPrompt(criticMode, language);
   const contextSection = contextText || '';
-  const prompt = template
+  let prompt = template
     .replace('{context}', contextSection)
     .replace('{proposals}', proposalsText);
+
+  if (options?.requireCitation) {
+    prompt += '\n\nCITATION REQUIREMENT: For EVERY objection, you MUST quote the exact text from the proposal. Format: CITE: "[exact quote]" → OBJECTION: [your objection]. Objections without citations will be discarded.';
+  }
+  if (options?.classifyObjections) {
+    prompt += '\n\nCLASSIFICATION REQUIREMENT: For EVERY objection, classify it.\nFormat: [TYPE:factual|SEVERITY:critical] OBJECTION: [description]\nTypes: factual, logical, stylistic, evidential\nSeverities: critical, moderate, minor';
+  }
 
   const response = await provider.call(model, prompt);
 
@@ -205,4 +213,21 @@ export async function runCritic(
     model: model.split('/').pop() || model,
     content: response.content,
   };
+}
+
+export function parseClassifiedObjections(critiqueContent: string): ClassifiedObjection[] {
+  const pattern = /\[TYPE:(\w+)\|SEVERITY:(\w+)\]\s*OBJECTION:\s*(.+?)(?=\[TYPE:|\n\n|$)/gs;
+  const results: ClassifiedObjection[] = [];
+  let match;
+  while ((match = pattern.exec(critiqueContent)) !== null) {
+    const citeMatch = critiqueContent.slice(Math.max(0, match.index - 200), match.index).match(/CITE:\s*"([^"]+)"/);
+    results.push({
+      claim: match[3].trim().slice(0, 100),
+      type: match[1] as ObjectionType,
+      severity: match[2] as ObjectionSeverity,
+      explanation: match[3].trim(),
+      ...(citeMatch ? { cited_text: citeMatch[1] } : {}),
+    });
+  }
+  return results;
 }

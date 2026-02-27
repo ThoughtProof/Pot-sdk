@@ -157,7 +157,8 @@ export async function runSynthesizer(
   critique: Critique,
   language: 'de' | 'en' = 'de',
   dryRun: boolean = false,
-  contextText?: string
+  contextText?: string,
+  receptiveMode?: 'open' | 'defensive' | 'adaptive'
 ): Promise<Synthesis> {
   if (dryRun) {
     return {
@@ -172,7 +173,17 @@ export async function runSynthesizer(
 
   const template = language === 'de' ? SYNTHESIZER_PROMPT_DE : SYNTHESIZER_PROMPT_EN;
   const contextSection = contextText || '';
-  const prompt = template
+
+  let receptionPrefix = '';
+  if (receptiveMode === 'open') {
+    receptionPrefix = 'RECEPTION MODE: You are fully open to critique. Incorporate valid objections. Do not defend — adapt.\n\n';
+  } else if (receptiveMode === 'defensive') {
+    receptionPrefix = 'RECEPTION MODE: You represent the original proposals. Push back on weak critique. Defend sound reasoning.\n\n';
+  } else if (receptiveMode === 'adaptive') {
+    receptionPrefix = 'RECEPTION MODE: Evaluate each critique on its merits. Incorporate strong objections, push back on weak ones.\n\n';
+  }
+
+  const prompt = receptionPrefix + template
     .replace('{context}', contextSection)
     .replace('{proposals}', proposalsText)
     .replace('{critique}', critique.content);

@@ -1,4 +1,7 @@
 export * from './types.js';
+export { DOMAIN_PROFILES } from './domains.js';
+export type { DomainConfig } from './domains.js';
+export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity } from './types.js';
 export * from './verify.js';
 export { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
 export { deepAnalysis } from './deep.js';

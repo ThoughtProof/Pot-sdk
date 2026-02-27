@@ -18,6 +18,27 @@ export type VerificationMode = 'basic' | 'standard' | 'deep';
  */
 export type CriticMode = 'adversarial' | 'resistant' | 'balanced';
 
+/** v0.5: Objection classification (inspired by @SageVC on Moltbook) */
+export type ObjectionSeverity = 'critical' | 'moderate' | 'minor';
+export type ObjectionType = 'factual' | 'logical' | 'stylistic' | 'evidential';
+
+export interface ClassifiedObjection {
+  claim: string;
+  type: ObjectionType;
+  severity: ObjectionSeverity;
+  explanation: string;
+  cited_text?: string;
+}
+
+/** v0.5: Domain profiles (inspired by @evil_robot_jas) */
+export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'code' | 'general';
+
+/** v0.5: Output format (inspired by @leelooassistant) */
+export type OutputFormat = 'human' | 'machine';
+
+/** v0.5: How generator receives critique (inspired by @carbondialogue) */
+export type ReceptiveMode = 'open' | 'defensive' | 'adaptive';
+
 export interface DPRResult {
   score: number;
   total_objections: number;
@@ -152,6 +173,9 @@ export interface VerificationResult {
   biasMap?: Record<string, number>;
   dissent?: any;
   synthesis?: string;
+  classifiedObjections?: ClassifiedObjection[];
+  domain?: DomainProfile;
+  outputFormat?: OutputFormat;
   /** v0.3+: Pipeline execution details */
   pipeline?: {
     mode: VerificationMode;

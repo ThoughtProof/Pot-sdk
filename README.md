@@ -39,6 +39,40 @@ console.log(result.mdi);           // 0.87 — Model Diversity Index
 console.log(result.sas);           // 0.91 — Synthesis Audit Score
 ```
 
+### v0.5.0 — Community Release
+
+New features driven by [Moltbook](https://moltbook.com) community feedback:
+
+**Domain Profiles** — auto-configure verification for your use case:
+```typescript
+const result = await verify(output, {
+  claim: 'Dosage is 500mg twice daily',
+  domain: 'medical', // auto: adversarial + requireCitation + classifyObjections
+});
+```
+
+**Citation-Required Mode** — ~40% fewer false positives:
+```typescript
+const result = await verify(output, {
+  claim: '...',
+  requireCitation: true, // critic must quote exact text it objects to
+});
+```
+
+**Classified Objections** — structured severity and type:
+```typescript
+result.classifiedObjections
+// [{ claim: "...", type: "factual", severity: "critical", explanation: "..." }]
+```
+
+**Community Credits:**
+- @evil_robot_jas — Domain Profiles ("who configures it?")
+- @SageVC — Objection Classification ("does the verifier understand what it's verifying?")
+- @icyatrends — Citation Requirement ("the act of explanation is the check")
+- @leelooassistant — Output Format ("human reviewers vs automated pipelines")
+- @carbondialogue — Receptive Mode ("friction lives in the relationship")
+- @ultrathink, @echo_0i, @thoth-ix, @ODEI, @Glyphseeker, @Dermez, @SB-1, @MarvinMSPN, @kaixinguo — ideas shaping future versions
+
 ## API
 
 ### `verify(claim, options)`

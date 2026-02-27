@@ -1,4 +1,7 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection } from './types.js';
+import { DOMAIN_PROFILES } from './domains.js';
+import type { DomainConfig } from './domains.js';
+import { parseClassifiedObjections } from './pipeline/critic.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
@@ -11,7 +14,8 @@ import { runSandboxCheck } from './sandbox.js';
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
   provider2: ReturnType<typeof createProvider>, model2: string,
-  proposals: Proposal[], critique: { model: string; content: string }, lang: 'en' | 'de'
+  proposals: Proposal[], critique: { model: string; content: string }, lang: 'en' | 'de',
+  receptiveMode?: 'open' | 'defensive' | 'adaptive'
 ): Promise<{ primary: Synthesis; verification: { similarity_score: number; diverged: boolean; synth_coverage?: number } }> {
   if (provider1 === provider2 && model1 === model2) {
     throw new Error('Dual synthesizer requires distinct provider+model pairs');
@@ -20,8 +24,8 @@ async function runDualSynthesizer(
   const SIMILARITY_DIVERGENCE_THRESHOLD = 0.6;
 
   const synthCalls = [
-    runSynthesizer(provider1, model1, proposals, critique, lang),
-    runSynthesizer(provider2, model2, proposals, critique, lang),
+    runSynthesizer(provider1, model1, proposals, critique, lang, false, undefined, receptiveMode),
+    runSynthesizer(provider2, model2, proposals, critique, lang, false, undefined, receptiveMode),
   ];
 
   const results = await Promise.allSettled(synthCalls);
@@ -97,6 +101,16 @@ interface VerifyParams {
    * If omitted, defaults to 'adversarial' (backward compatible with v0.3 behavior).
    */
   criticMode?: CriticMode;
+  /** v0.5+: Domain profile — auto-configures criticMode, requireCitation, classifyObjections, receptiveMode, maxConfidence */
+  domain?: DomainProfile;
+  /** v0.5+: Require critic to cite exact text for every objection (~40% fewer false positives) */
+  requireCitation?: boolean;
+  /** v0.5+: Classify each objection by type and severity */
+  classifyObjections?: boolean;
+  /** v0.5+: Output format for downstream consumers */
+  outputFormat?: OutputFormat;
+  /** v0.5+: How the synthesizer receives critique */
+  receptiveMode?: ReceptiveMode;
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -211,8 +225,19 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     proposals.push({ model: 'user-output', content: output });
   }
 
-  const criticMode: CriticMode = params.criticMode || 'adversarial';
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, criticMode);
+  // v0.5: Domain profile defaults
+  let domainConfig: DomainConfig | undefined;
+  if (params.domain) {
+    domainConfig = DOMAIN_PROFILES[params.domain];
+  }
+
+  const criticMode: CriticMode = params.criticMode || domainConfig?.criticMode || 'adversarial';
+  const requireCitation = params.requireCitation ?? domainConfig?.requireCitation ?? false;
+  const classifyObjections = params.classifyObjections ?? domainConfig?.classifyObjections ?? false;
+  const receptiveMode = params.receptiveMode ?? domainConfig?.receptiveMode;
+  const outputFormat = params.outputFormat ?? 'human';
+
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, criticMode, { requireCitation, classifyObjections });
 
   let synthesis: Synthesis;
   let dissent: any = undefined;
@@ -223,7 +248,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     const { primary, verification } = await runDualSynthesizer(
       synth1.provider, synth1.model,
       synth2.provider, synth2.model,
-      proposals, critique, lang
+      proposals, critique, lang,
+      receptiveMode
     );
     synthesis = primary;
     dissent = verification;
@@ -234,7 +260,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
         single_source_warning: "Only one provider available; dual synthesis skipped",
       };
     }
-    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critique, lang);
+    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critique, lang, false, undefined, receptiveMode);
   }
 
   const genProposals = proposals.filter(p => p.model !== 'user-output');
@@ -273,15 +299,24 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     ? Math.min(confidence, adversarialScan.confidence_cap)
     : confidence;
 
-  const verified = finalConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
+  // v0.5: Apply domain maxConfidence cap
+  let cappedConfidence = finalConfidence;
+  if (domainConfig?.maxConfidence) {
+    cappedConfidence = Math.min(finalConfidence, domainConfig.maxConfidence);
+  }
+
+  const verified = cappedConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
+
+  // v0.5: Parse classified objections if enabled
+  const classifiedObjs = classifyObjections ? parseClassifiedObjections(critique.content) : undefined;
 
   // v0.3: Compute verdict enum
   let verdict: Verdict;
-  if (dpr.false_consensus && finalConfidence >= 0.70) {
+  if (dpr.false_consensus && cappedConfidence >= 0.70) {
     verdict = 'DISSENT';
-  } else if (finalConfidence >= 0.70 && flags.length === 0 && balance.score > 0.6) {
+  } else if (cappedConfidence >= 0.70 && flags.length === 0 && balance.score > 0.6) {
     verdict = 'VERIFIED';
-  } else if (finalConfidence >= 0.70) {
+  } else if (cappedConfidence >= 0.70) {
     verdict = 'UNVERIFIED';
   } else {
     verdict = 'UNCERTAIN';
@@ -297,7 +332,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const result = {
     verified,
     verdict,
-    confidence: finalConfidence,
+    confidence: cappedConfidence,
     tier,
     flags,
     timestamp: new Date().toISOString(),
@@ -316,6 +351,9 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       duration_ms: durationMs,
     },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
+    ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
+    ...(params.domain ? { domain: params.domain } : {}),
+    ...(outputFormat !== 'human' ? { outputFormat } : {}),
   } as VerificationResult;
 
   if (params.debug) {
