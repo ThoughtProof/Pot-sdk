@@ -39,6 +39,13 @@ export type OutputFormat = 'human' | 'machine';
 /** v0.5: How generator receives critique (inspired by @carbondialogue) */
 export type ReceptiveMode = 'open' | 'defensive' | 'adaptive';
 
+/**
+ * v0.6+: Explicit cost-of-being-wrong parameter.
+ * Credit: @evil_robot_jas on Moltbook — "the cost-of-being-wrong variable is doing
+ * so much work that flattening it into confidence feels almost dishonest"
+ */
+export type FailureCost = 'negligible' | 'low' | 'moderate' | 'high' | 'critical';
+
 export interface DPRResult {
   score: number;
   total_objections: number;
@@ -176,6 +183,20 @@ export interface VerificationResult {
   classifiedObjections?: ClassifiedObjection[];
   domain?: DomainProfile;
   outputFormat?: OutputFormat;
+  /** v0.6+: Fact-checked objections when multiRound is enabled */
+  factCheckedObjections?: import('./pipeline/factcheck.js').FactCheckedObjection[];
+  /** v0.6+: Cousin bias warning when providers share training lineage */
+  cousinWarning?: { detected: boolean; reason: string; sharedProviders: string[] };
+  /** v0.6+: Self-explanations when requireExplanation is enabled */
+  explanations?: { claim: string; reasoning: string; evidence: string[] }[];
+  /** v0.6+: Whether auto-calibration adjusted the confidence */
+  calibrationAdjusted?: boolean;
+  /** v0.6+: How much auto-calibration shifted confidence */
+  calibrationDelta?: number;
+  /** v0.6+: Which failureCost threshold was applied */
+  failureCostApplied?: FailureCost;
+  /** v0.6+: Toxic combination auto-correction details */
+  toxicCorrected?: { original: { criticMode: CriticMode; receptiveMode: ReceptiveMode }; corrected: { criticMode: CriticMode; receptiveMode: ReceptiveMode }; reason: string };
   /** v0.3+: Pipeline execution details */
   pipeline?: {
     mode: VerificationMode;

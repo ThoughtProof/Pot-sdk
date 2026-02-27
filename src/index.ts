@@ -1,7 +1,11 @@
 export * from './types.js';
 export { DOMAIN_PROFILES, resolveDomain, isDomainDowngrade } from './domains.js';
 export type { DomainConfig, DomainLockfile } from './domains.js';
-export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity } from './types.js';
+export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, FailureCost } from './types.js';
+export { calibrateConfidence } from './calibration.js';
+export type { CalibrationResult } from './calibration.js';
+export { factCheckCritic } from './pipeline/factcheck.js';
+export type { FactCheckedObjection, FactCheckResult } from './pipeline/factcheck.js';
 export * from './verify.js';
 export { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
 export { deepAnalysis } from './deep.js';

@@ -1,7 +1,8 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost } from './types.js';
 import { DOMAIN_PROFILES, checkToxicCombination, resolveDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
 import { parseClassifiedObjections } from './pipeline/critic.js';
+import { factCheckCritic } from './pipeline/factcheck.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
@@ -10,6 +11,7 @@ import { createProvider, createProviderFromConfig, assignRoles } from './provide
 import { parseConfidence, computeMdi } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
 import { runSandboxCheck } from './sandbox.js';
+import { calibrateConfidence } from './calibration.js';
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -113,6 +115,59 @@ interface VerifyParams {
   receptiveMode?: ReceptiveMode;
   /** v0.5.1+: Domain lockfile — enforces minimum domain severity. Ratchet, not slider. (inspired by @evil_robot_jas) */
   domainLockfile?: DomainLockfile;
+  /** v0.6+: Explicit cost-of-being-wrong. Adjusts verdict thresholds. Credit: @evil_robot_jas */
+  failureCost?: FailureCost;
+  /** v0.6+: Auto fact-check the critic using a different provider. Credit: ThoughtProof ibuprofen benchmark */
+  multiRound?: boolean;
+  /** v0.6+: Require synthesizer to explain WHY each claim is verified/unverified */
+  requireExplanation?: boolean;
+  /** v0.6+: Auto-correct toxic combinations instead of just warning */
+  autoCorrectToxic?: boolean;
+}
+
+/**
+ * v0.6: failureCost → verdict threshold mapping.
+ * Credit: @evil_robot_jas — "a liability dressed up as a safety feature"
+ */
+const FAILURE_COST_THRESHOLDS: Record<FailureCost, number> = {
+  negligible: 0.50,
+  low: 0.60,
+  moderate: 0.70,
+  high: 0.80,
+  critical: 0.90,
+};
+
+/**
+ * v0.6: Detect cousin bias — providers sharing training lineage.
+ * Credit: @evil_robot_jas — "polite argument between cousins"
+ */
+function detectCousinBias(
+  generatorModels: string[],
+  criticModel: string,
+  providers: ProviderConfig[] | undefined,
+): { detected: boolean; reason: string; sharedProviders: string[] } {
+  if (!providers || !Array.isArray(providers)) {
+    return { detected: false, reason: '', sharedProviders: [] };
+  }
+  const providerNames = providers.map(p => p.name.toLowerCase());
+  const uniqueNames = new Set(providerNames);
+  if (uniqueNames.size === 1) {
+    return {
+      detected: true,
+      reason: `All providers share the same source (${[...uniqueNames][0]}) — shared training bias likely`,
+      sharedProviders: [...uniqueNames],
+    };
+  }
+  const bigLabs = new Set(['anthropic', 'openai', 'google', 'deepmind']);
+  const allBigLab = providerNames.every(n => bigLabs.has(n));
+  if (allBigLab && uniqueNames.size <= 2) {
+    return {
+      detected: true,
+      reason: `All providers from major labs (${[...uniqueNames].join(', ')}) — shared pretraining data likely`,
+      sharedProviders: [...uniqueNames],
+    };
+  }
+  return { detected: false, reason: '', sharedProviders: [] };
 }
 
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
@@ -241,10 +296,52 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const receptiveMode = params.receptiveMode ?? domainConfig?.receptiveMode;
   const outputFormat = params.outputFormat ?? 'human';
 
-  // v0.5.1: Toxic combination warning (insight from @evil_robot_jas)
-  const toxicWarning = receptiveMode ? checkToxicCombination(criticMode, receptiveMode) : null;
+  // v0.6: Toxic combination auto-correction (upgrade from v0.5.1 warning-only)
+  let effectiveCriticMode = criticMode;
+  let effectiveReceptiveMode = receptiveMode;
+  let toxicCorrected: any = undefined;
+  const toxicWarning = effectiveReceptiveMode ? checkToxicCombination(effectiveCriticMode, effectiveReceptiveMode) : null;
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, criticMode, { requireCitation, classifyObjections });
+  if (toxicWarning && params.autoCorrectToxic) {
+    const original = { criticMode: effectiveCriticMode, receptiveMode: effectiveReceptiveMode! };
+    if (effectiveCriticMode === 'adversarial' && effectiveReceptiveMode === 'defensive') {
+      effectiveReceptiveMode = 'adaptive';
+    } else if (effectiveCriticMode === 'balanced' && effectiveReceptiveMode === 'defensive') {
+      effectiveCriticMode = 'resistant';
+      effectiveReceptiveMode = 'open';
+    }
+    toxicCorrected = {
+      original,
+      corrected: { criticMode: effectiveCriticMode, receptiveMode: effectiveReceptiveMode },
+      reason: toxicWarning,
+    };
+  }
+
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections });
+
+  // v0.6: Multi-round fact-checking — the critic gets checked
+  let factCheckedObjections: import('./pipeline/factcheck.js').FactCheckedObjection[] | undefined;
+  let effectiveCritiqueContent = critique.content;
+  let multiRoundSkipped = false;
+
+  if (params.multiRound && classifyObjections) {
+    const parsedObjs = parseClassifiedObjections(critique.content);
+    if (parsedObjs.length > 0) {
+      const factCheckProv = gensProviders.find(g => g.model !== criticModel) || gensProviders[0];
+      if (factCheckProv.model !== criticModel) {
+        const fcResult = await factCheckCritic(
+          factCheckProv.provider, factCheckProv.model,
+          critique.content, parsedObjs, question, lang,
+        );
+        factCheckedObjections = fcResult.checkedObjections;
+        effectiveCritiqueContent = fcResult.filteredCritiqueContent;
+      } else {
+        multiRoundSkipped = true;
+      }
+    }
+  }
+
+  const critiqueForSynthesis = { model: critique.model, content: effectiveCritiqueContent };
 
   let synthesis: Synthesis;
   let dissent: any = undefined;
@@ -255,8 +352,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     const { primary, verification } = await runDualSynthesizer(
       synth1.provider, synth1.model,
       synth2.provider, synth2.model,
-      proposals, critique, lang,
-      receptiveMode
+      proposals, critiqueForSynthesis, lang,
+      effectiveReceptiveMode
     );
     synthesis = primary;
     dissent = verification;
@@ -267,7 +364,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
         single_source_warning: "Only one provider available; dual synthesis skipped",
       };
     }
-    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critique, lang, false, undefined, receptiveMode);
+    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critiqueForSynthesis, lang, false, undefined, effectiveReceptiveMode);
   }
 
   const genProposals = proposals.filter(p => p.model !== 'user-output');
@@ -295,6 +392,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
   if (toxicWarning) flags.push('toxic-combination');
+  if (multiRoundSkipped) flags.push('multiround-same-provider');
 
   // Collect WASM sandbox result (was running in parallel with pipeline)
   const sandboxResult = await sandboxPromise;
@@ -313,18 +411,30 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     cappedConfidence = Math.min(finalConfidence, domainConfig.maxConfidence);
   }
 
-  const verified = cappedConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
+  // v0.6: Auto-calibration — entropy-based confidence adjustment
+  const calibration = calibrateConfidence(cappedConfidence, synthesis.content);
+  const finalCalibratedConfidence = calibration.calibratedConfidence;
+  if (calibration.reason && !calibration.adjusted && calibration.reason.includes('mismatch')) {
+    flags.push('calibration-mismatch');
+  }
+
+  const verified = finalCalibratedConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
 
   // v0.5: Parse classified objections if enabled
   const classifiedObjs = classifyObjections ? parseClassifiedObjections(critique.content) : undefined;
 
-  // v0.3: Compute verdict enum
+  // v0.6: failureCost-adjusted verdict thresholds
+  const verdictThreshold = params.failureCost
+    ? FAILURE_COST_THRESHOLDS[params.failureCost]
+    : 0.70;
+
+  // v0.3+v0.6: Compute verdict enum with failureCost-aware thresholds
   let verdict: Verdict;
-  if (dpr.false_consensus && cappedConfidence >= 0.70) {
+  if (dpr.false_consensus && finalCalibratedConfidence >= verdictThreshold) {
     verdict = 'DISSENT';
-  } else if (cappedConfidence >= 0.70 && flags.length === 0 && balance.score > 0.6) {
+  } else if (finalCalibratedConfidence >= verdictThreshold && flags.length === 0 && balance.score > 0.6) {
     verdict = 'VERIFIED';
-  } else if (cappedConfidence >= 0.70) {
+  } else if (finalCalibratedConfidence >= verdictThreshold) {
     verdict = 'UNVERIFIED';
   } else {
     verdict = 'UNCERTAIN';
@@ -337,10 +447,17 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     return acc;
   }, {});
 
+  // v0.6: Cousin bias detection
+  const cousinWarning = detectCousinBias(
+    generatorModelNames, criticModel,
+    Array.isArray(params.providers) ? params.providers as ProviderConfig[] : undefined,
+  );
+  if (cousinWarning.detected) flags.push('cousin-bias-risk');
+
   const result = {
     verified,
     verdict,
-    confidence: cappedConfidence,
+    confidence: finalCalibratedConfidence,
     tier,
     flags,
     timestamp: new Date().toISOString(),
@@ -355,13 +472,18 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       generators: generatorModelNames,
       critic: criticModel,
       synthesizer: synthModel,
-      rounds: mode === 'deep' ? 2 : 1,
+      rounds: params.multiRound ? (mode === 'deep' ? 3 : 2) : (mode === 'deep' ? 2 : 1),
       duration_ms: durationMs,
     },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
     ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
     ...(effectiveDomain ? { domain: effectiveDomain } : {}),
     ...(outputFormat !== 'human' ? { outputFormat } : {}),
+    ...(factCheckedObjections ? { factCheckedObjections } : {}),
+    ...(cousinWarning.detected ? { cousinWarning } : {}),
+    ...(calibration.adjusted ? { calibrationAdjusted: true, calibrationDelta: calibration.delta } : {}),
+    ...(params.failureCost ? { failureCostApplied: params.failureCost } : {}),
+    ...(toxicCorrected ? { toxicCorrected } : {}),
   } as VerificationResult;
 
   if (params.debug) {
