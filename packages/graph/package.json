@@ -1,0 +1,40 @@
+{
+  "name": "@pot-sdk2/graph",
+  "version": "0.8.0",
+  "description": "Structural knowledge-graph verification for pot-sdk — The Graph",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "test": "vitest run",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch"
+  },
+  "keywords": [
+    "ai-verification",
+    "llm",
+    "thoughtproof",
+    "pot-sdk",
+    "knowledge-graph",
+    "topology",
+    "critic"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.9"
+  }
+}
