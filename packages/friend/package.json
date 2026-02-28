@@ -1,5 +1,5 @@
 {
-  "name": "@pot-sdk/friend",
+  "name": "@pot-sdk2/friend",
   "version": "0.7.0",
   "description": "Persistent critic with memory for pot-sdk — The Friend",
   "type": "module",
