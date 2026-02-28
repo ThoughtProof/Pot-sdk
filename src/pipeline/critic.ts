@@ -1,4 +1,4 @@
-import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity } from '../types.js';
+import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, CalibrationCriticResult } from '../types.js';
 
 // ── Adversarial Mode: "Find every flaw" ────────────────────────────────────
 const CRITIC_PROMPT_DE = `Du bist ein brutaler Red-Team Analyst und Fakten-Checker. Deine Aufgabe: Finde ALLE Schwächen in diesen Proposals.
@@ -163,14 +163,79 @@ DISAGREEMENT ANALYSIS:
 PROPOSALS:
 {proposals}`;
 
+// ── Calibrative Mode: Re-score confidence WITHOUT generating objections ──────
+// Credit: Moltbook "Not all friction" discussion (85 comments)
+// "calibrative friction adjusts the dial, it doesn't yank the steering wheel" — @evil_robot_jas
+const CALIBRATIVE_PROMPT_DE = `Du bist ein Kalibrierungs-Reviewer. Greife die Behauptung NICHT an und verteidige sie auch nicht.
+Analysiere stattdessen die strukturelle Qualität der vorliegenden Analyse:
+
+- Wie viel Absicherungssprache ("könnte", "möglicherweise", "vielleicht") ist vorhanden vs. assertive Behauptungen?
+- Gibt es unbegründete logische Sprünge zwischen Prämissen und Schlussfolgerungen?
+- Ist die Argumentation intern konsistent?
+- Entspricht das angegebene Konfidenz-Niveau der Qualität der vorgelegten Belege?
+
+Gib NUR ein JSON-Objekt aus (kein anderer Text, keine Erklärung darum herum):
+{"adjustment": -0.12, "reason": "Hohe Absicherungssprache ('könnte', 'möglicherweise') widerspricht der angegebenen 0.9 Konfidenz"}
+
+Regeln:
+- Adjustment: Fließkommazahl zwischen -0.30 und +0.15
+- Negativ = Konfidenz zu hoch für die Evidenzlage
+- Positiv = Analyse ist konservativer als die Evidenz es rechtfertigt
+- Keine Einwände generieren
+- Kein Angriff auf Fakten
+
+PROPOSALS ZUR KALIBRIERUNG:
+{proposals}`;
+
+const CALIBRATIVE_PROMPT_EN = `You are a calibration reviewer. Do NOT attack or defend the claim.
+Instead, analyze the structural quality of the analysis:
+
+- How much hedging language ("might", "possibly", "could") is present vs. assertive claims?
+- Are there unsupported logical leaps between premises and conclusions?
+- Is the reasoning internally consistent?
+- Does the confidence level match the evidence quality presented?
+
+Output ONLY a JSON object (no other text, no surrounding explanation):
+{"adjustment": -0.12, "reason": "High hedging ('might', 'possibly') contradicts stated 0.9 confidence"}
+
+Rules:
+- Adjustment: float between -0.30 and +0.15
+- Negative = stated confidence is too high for the evidence quality
+- Positive = analysis is more conservative than the evidence warrants
+- Do NOT generate new objections
+- Do NOT attack factual claims
+
+PROPOSALS TO CALIBRATE:
+{proposals}`;
+
 // ── Prompt selection by mode and language ───────────────────────────────────
 function selectCriticPrompt(criticMode: CriticMode, language: 'de' | 'en'): string {
   const prompts: Record<CriticMode, Record<'de' | 'en', string>> = {
-    adversarial: { de: CRITIC_PROMPT_DE, en: CRITIC_PROMPT_EN },
-    resistant:   { de: RESISTANT_PROMPT_DE, en: RESISTANT_PROMPT_EN },
-    balanced:    { de: BALANCED_PROMPT_DE, en: BALANCED_PROMPT_EN },
+    adversarial:  { de: CRITIC_PROMPT_DE, en: CRITIC_PROMPT_EN },
+    resistant:    { de: RESISTANT_PROMPT_DE, en: RESISTANT_PROMPT_EN },
+    balanced:     { de: BALANCED_PROMPT_DE, en: BALANCED_PROMPT_EN },
+    calibrative:  { de: CALIBRATIVE_PROMPT_DE, en: CALIBRATIVE_PROMPT_EN },
   };
   return prompts[criticMode][language];
+}
+
+/**
+ * v0.6.1: Parse the JSON output of a calibrative critic call.
+ * Returns { adjustment, reason } or defaults to { adjustment: 0, reason: 'parse-failed' }.
+ */
+export function parseCalibrationCriticResult(content: string): { adjustment: number; reason: string } {
+  try {
+    const match = content.match(/\{[\s\S]*?\}/);
+    if (!match) return { adjustment: 0, reason: 'parse-failed: no JSON found' };
+    const parsed = JSON.parse(match[0]);
+    const adjustment = typeof parsed.adjustment === 'number'
+      ? Math.max(-0.30, Math.min(0.15, parsed.adjustment))
+      : 0;
+    const reason = typeof parsed.reason === 'string' ? parsed.reason : 'no reason provided';
+    return { adjustment, reason };
+  } catch {
+    return { adjustment: 0, reason: 'parse-failed: invalid JSON' };
+  }
 }
 
 export async function runCritic(

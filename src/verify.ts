@@ -1,7 +1,7 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost } from './types.js';
+import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
 import { DOMAIN_PROFILES, checkToxicCombination, resolveDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
-import { parseClassifiedObjections } from './pipeline/critic.js';
+import { parseClassifiedObjections, parseCalibrationCriticResult } from './pipeline/critic.js';
 import { factCheckCritic } from './pipeline/factcheck.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
@@ -123,6 +123,13 @@ interface VerifyParams {
   requireExplanation?: boolean;
   /** v0.6+: Auto-correct toxic combinations instead of just warning */
   autoCorrectToxic?: boolean;
+  /**
+   * v0.6.1+: Audience-aware output formatting.
+   *   - 'human' (default): Full synthesis, all objections, dissent, reasoning chain.
+   *   - 'pipeline': Minimal actionable signal — verdict, confidence, flags, top objection.
+   * Credit: Moltbook "Not all friction" discussion — @carbondialogue et al.
+   */
+  audience?: Audience;
 }
 
 /**
@@ -413,9 +420,21 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   // v0.6: Auto-calibration — entropy-based confidence adjustment
   const calibration = calibrateConfidence(cappedConfidence, synthesis.content);
-  const finalCalibratedConfidence = calibration.calibratedConfidence;
+  let finalCalibratedConfidence = calibration.calibratedConfidence;
   if (calibration.reason && !calibration.adjusted && calibration.reason.includes('mismatch')) {
     flags.push('calibration-mismatch');
+  }
+
+  // v0.6.1: Calibrative critic mode — apply structural confidence adjustment
+  let calibrativeDelta: number | undefined;
+  let calibrativeReason: string | undefined;
+  if (effectiveCriticMode === 'calibrative') {
+    const calibrativeResult = parseCalibrationCriticResult(critique.content);
+    calibrativeDelta = calibrativeResult.adjustment;
+    calibrativeReason = calibrativeResult.reason;
+    finalCalibratedConfidence = Math.max(0, Math.min(1, finalCalibratedConfidence + calibrativeDelta));
+    if (calibrativeDelta < -0.05) flags.push('calibrative-downward');
+    if (calibrativeDelta > 0.05) flags.push('calibrative-upward');
   }
 
   const verified = finalCalibratedConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
@@ -484,10 +503,36 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     ...(calibration.adjusted ? { calibrationAdjusted: true, calibrationDelta: calibration.delta } : {}),
     ...(params.failureCost ? { failureCostApplied: params.failureCost } : {}),
     ...(toxicCorrected ? { toxicCorrected } : {}),
+    // v0.6.1: calibrative mode metadata
+    ...(calibrativeDelta !== undefined ? { calibrativeDelta, calibrativeReason } : {}),
+    // v0.6.1: audience metadata (only store if explicitly set)
+    ...(params.audience ? { audience: params.audience } : {}),
   } as VerificationResult;
 
   if (params.debug) {
     (result as any).raw = { proposals, critique, synthesis };
+  }
+
+  // v0.6.1: Audience-aware output formatting
+  // 'human' (default): no transformation — full result returned
+  // 'pipeline': minimal actionable shape appended as pipelineResult
+  if (params.audience === 'pipeline') {
+    const topObj = result.classifiedObjections?.[0];
+    const pipelineResult: PipelineResult = {
+      pass: verdict === 'VERIFIED',
+      confidence: result.confidence,
+      flags: result.flags,
+      verdict: result.verdict,
+      audience: 'pipeline',
+      ...(topObj ? {
+        topObjection: {
+          type: topObj.type,
+          severity: topObj.severity,
+          claim: topObj.claim,
+        },
+      } : {}),
+    };
+    result.pipelineResult = pipelineResult;
   }
 
   return result;

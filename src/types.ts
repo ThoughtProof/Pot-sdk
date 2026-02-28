@@ -7,16 +7,20 @@ export type VerificationMode = 'basic' | 'standard' | 'deep';
 /**
  * v0.4+: Controls how the critic evaluates proposals.
  *
- *   - adversarial: "Find every flaw" — explicit red-team prompt, forced opposing perspective.
- *                  Surfaces more dissent (~60% agreement). Higher false-positive rate on objections.
- *   - resistant:   "Verify claims require evidence" — skeptical prior, doesn't actively attack.
- *                  Fewer but higher-confidence objections (~75% agreement). Lower noise.
- *   - balanced:    Adversarial on factual claims, resistant on logical structure. Default.
+ *   - adversarial:  "Find every flaw" — explicit red-team prompt, forced opposing perspective.
+ *                   Surfaces more dissent (~60% agreement). Higher false-positive rate on objections.
+ *   - resistant:    "Verify claims require evidence" — skeptical prior, doesn't actively attack.
+ *                   Fewer but higher-confidence objections (~75% agreement). Lower noise.
+ *   - balanced:     Adversarial on factual claims, resistant on logical structure. Default.
+ *   - calibrative:  Re-scores confidence WITHOUT generating new objections. Analyzes structural
+ *                   coherence (hedging language, logical leaps, internal consistency) and outputs
+ *                   a numeric adjustment factor. Does NOT attack or defend the claim.
+ *                   Credit: Moltbook "Not all friction" discussion (85 comments, @evil_robot_jas et al.)
  *
  * Inspired by a Moltbook discussion with @evil_robot_jas on the distinction between
  * friction that's hostile vs. friction that's resistant.
  */
-export type CriticMode = 'adversarial' | 'resistant' | 'balanced';
+export type CriticMode = 'adversarial' | 'resistant' | 'balanced' | 'calibrative';
 
 /** v0.5: Objection classification (inspired by @SageVC on Moltbook) */
 export type ObjectionSeverity = 'critical' | 'moderate' | 'minor';
@@ -35,6 +39,36 @@ export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'co
 
 /** v0.5: Output format (inspired by @leelooassistant) */
 export type OutputFormat = 'human' | 'machine';
+
+/**
+ * v0.6.1: Audience-aware output formatting.
+ *   - human:    Full synthesis, all classified objections, dissent details, reasoning chain.
+ *   - pipeline: Minimal actionable signal — verdict, confidence, flags, top objection only.
+ * Credit: Moltbook "Not all friction" discussion — @carbondialogue, @thoth-ix, @SageVC
+ */
+export type Audience = 'human' | 'pipeline';
+
+/**
+ * v0.6.1: Parsed result of a calibrative critic response.
+ * The critic outputs ONLY a JSON object with an adjustment factor (-1..1) and reason.
+ */
+export interface CalibrationCriticResult {
+  adjustment: number;
+  reason: string;
+}
+
+/**
+ * v0.6.1: Minimal pipeline-optimized result shape.
+ * Returned when audience: 'pipeline' is set.
+ */
+export interface PipelineResult {
+  pass: boolean;
+  confidence: number;
+  flags: string[];
+  topObjection?: { type: string; severity: string; claim: string };
+  verdict: string;
+  audience: 'pipeline';
+}
 
 /** v0.5: How generator receives critique (inspired by @carbondialogue) */
 export type ReceptiveMode = 'open' | 'defensive' | 'adaptive';
@@ -197,6 +231,14 @@ export interface VerificationResult {
   failureCostApplied?: FailureCost;
   /** v0.6+: Toxic combination auto-correction details */
   toxicCorrected?: { original: { criticMode: CriticMode; receptiveMode: ReceptiveMode }; corrected: { criticMode: CriticMode; receptiveMode: ReceptiveMode }; reason: string };
+  /** v0.6.1+: Audience setting used for this result */
+  audience?: Audience;
+  /** v0.6.1+: Confidence adjustment applied by calibrative critic mode */
+  calibrativeDelta?: number;
+  /** v0.6.1+: Reason from calibrative critic for confidence adjustment */
+  calibrativeReason?: string;
+  /** v0.6.1+: Pipeline-formatted result when audience: 'pipeline' */
+  pipelineResult?: PipelineResult;
   /** v0.3+: Pipeline execution details */
   pipeline?: {
     mode: VerificationMode;

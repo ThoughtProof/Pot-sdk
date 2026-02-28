@@ -1,6 +1,6 @@
 {
   "name": "pot-sdk",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "ThoughtProof SDK - Multi-model verification for AI outputs",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

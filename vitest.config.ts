@@ -1,1 +1,21 @@
-import { defineConfig } from 'vitest/config';\n\nimport { readFileSync } from 'fs';\nimport { fileURLToPath } from 'url';\n\nconst { dependencies, peerDependencies, devDependencies } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)));\n\nconst vitestGlobals = Object.keys({ ...dependencies, ...peerDependencies, ...devDependencies }).filter((dep) =>\n  dep.startsWith('@vitest/') || dep === 'vitest'\n);\n\nexport default defineConfig({\n  test: {\n    globals: true,\n    environment: 'node',\n    coverage: {\n      provider: 'v8',\n      reporter: ['text', 'json', 'html'],\n    },\n  },\n  globals: vitestGlobals,\n});
+import { defineConfig } from 'vitest/config';
+
+import { readFileSync } from 'fs';
+
+const { dependencies, peerDependencies, devDependencies } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)));
+
+const vitestGlobals = Object.keys({ ...dependencies, ...peerDependencies, ...devDependencies }).filter((dep) =>
+  dep.startsWith('@vitest/') || dep === 'vitest'
+);
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+    },
+  },
+  globals: vitestGlobals,
+});
