@@ -1,0 +1,41 @@
+{
+  "name": "@pot-sdk/friend",
+  "version": "0.7.0",
+  "description": "Persistent critic with memory for pot-sdk — The Friend",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.9"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "test": "node --experimental-sqlite --import tsx/esm tests/friend.test.ts",
+    "test:vitest": "vitest run",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch"
+  },
+  "keywords": [
+    "ai-verification",
+    "llm",
+    "thoughtproof",
+    "pot-sdk",
+    "memory",
+    "critic"
+  ],
+  "license": "MIT"
+}
