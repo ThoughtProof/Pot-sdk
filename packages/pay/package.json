@@ -1,0 +1,47 @@
+{
+  "name": "@pot-sdk2/pay",
+  "version": "0.9.4",
+  "description": "Payment reasoning verification for pot-sdk \u2014 x402 attestation layer",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "test": "node --experimental-sqlite --import tsx/esm tests/pay.test.ts",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch"
+  },
+  "dependencies": {
+    "pot-sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "thoughtproof",
+    "pot-sdk",
+    "x402",
+    "agent-payments",
+    "verification",
+    "attestation"
+  ],
+  "homepage": "https://thoughtproof.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ThoughtProof/pot-sdk"
+  }
+}
