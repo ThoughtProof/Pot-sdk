@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from 'crypto';
-import { verify } from 'pot-sdk';
+import { verify, createProviderFromConfig } from 'pot-sdk';
 import { buildAttestationHeaders } from './headers.js';
 import { resolvePolicy } from './policy.js';
 import { getWeight, warnIfNoHighPerformanceVerifier } from './profiles.js';
 import { buildPaymentVerifierPrompt } from './prompts.js';
+import {
+  CALIBRATED_NORMALIZE_SYSTEM,
+  buildCalibratedNormalizePrompt,
+  parseCalibratedNormalizeOutput,
+} from 'pot-sdk';
+import type { NormalizeOutput } from 'pot-sdk';
 import type { PayVerifyOptions, PayVerifyResult } from './types.js';
 
 function buildChainHash(chain: string, txNonce: string): string {
@@ -53,6 +59,31 @@ function applyConsensus(
   return flagCount >= threshold;
 }
 
+/**
+ * Format verifier outputs for the calibrated normalize prompt.
+ */
+function formatVerifierOutputs(
+  providers: PayVerifyOptions['providers'],
+  potResult: Awaited<ReturnType<typeof verify>>,
+  isFlagged: boolean,
+  confidence: number
+): string {
+  // Reconstruct per-verifier signal from aggregate pot-sdk result
+  // Until pot-sdk exposes per-verifier breakdown, we synthesize from known weights
+  const verifierWeightMap: Record<string, number> = {
+    'sonnet': 0.916, 'claude': 0.916,
+    'grok': 0.448,
+    'kimi': 0.264, 'moonshot': 0.264,
+    'deepseek': 0.88,
+  };
+  return providers.map((p) => {
+    const modelKey = Object.keys(verifierWeightMap).find(k => p.model.toLowerCase().includes(k));
+    const weight = modelKey ? verifierWeightMap[modelKey] : 0.5;
+    const verdict = isFlagged ? 'FLAG' : 'PASS';
+    return `- ${p.model}: ${verdict} (confidence: ${(confidence * weight).toFixed(2)}, weight: ${weight})`;
+  }).join('\n');
+}
+
 export async function verifyPayment(
   reasoningChain: string,
   options: PayVerifyOptions
@@ -67,6 +98,7 @@ export async function verifyPayment(
     attestationProvider = 'thoughtproof.ai',
     consensusMode = 'majority',
     valueThreshold = 50,
+    useCalibratedNormalize = false,
   } = options;
 
   // Warn if no high-performance verifier in the provider list
@@ -156,11 +188,42 @@ export async function verifyPayment(
   }));
 
   const consensusFlagged = applyConsensus(verifierVerdicts, effectiveConsensusMode);
-  const verdict: 'PASS' | 'FLAG' = consensusFlagged ? 'FLAG' : 'PASS';
+  let verdict: 'PASS' | 'FLAG' = consensusFlagged ? 'FLAG' : 'PASS';
+  let finalConfidence = confidence;
+
+  // DSPy Calibrated Normalize — optional final step (90% adversarial detection)
+  if (useCalibratedNormalize) {
+    try {
+      const normalizeProvider = providers.find(p => (p as any).role === 'normalize') ?? providers[0];
+      const provider = createProviderFromConfig(normalizeProvider);
+      const verifierText = formatVerifierOutputs(providers, potResult, isFlagged, confidence);
+      const userPrompt = buildCalibratedNormalizePrompt({
+        context: options.context ?? 'Payment verification',
+        reasoning: reasoningChain,
+        amount: `${amount} ${currency}`,
+        verifiers: verifierText,
+      });
+      // Combine system + user prompt — provider.call() takes a single prompt string
+      const combinedPrompt = `${CALIBRATED_NORMALIZE_SYSTEM}\n\n---\n\n${userPrompt}`;
+      const rawResponse = await provider.call(normalizeProvider.model, combinedPrompt);
+      const normalized: NormalizeOutput = parseCalibratedNormalizeOutput(rawResponse.content);
+      // Map normalize verdict → PASS/FLAG
+      verdict = (normalized.verdict === 'VERIFIED') ? 'PASS' : 'FLAG';
+      finalConfidence = normalized.confidence;
+      if (normalized.verdict === 'UNCERTAIN') verdict = 'FLAG'; // conservative
+      if (normalized.verdict === 'DISSENT') verdict = 'FLAG';   // escalate
+      concerns.push(...(normalized.verdict !== 'VERIFIED'
+        ? [`calibrated-normalize: ${normalized.calibration_reason}`]
+        : []));
+    } catch (err) {
+      // Normalize call failed — fall back to consensus verdict silently
+      console.warn('[pot-sdk/pay] Calibrated normalize failed, using consensus:', err);
+    }
+  }
 
   const partialResult = {
     verdict,
-    confidence,
+    confidence: finalConfidence,
     verifiers,
     chainHash,
     auditId,

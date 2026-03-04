@@ -23,3 +23,10 @@ export { signSchema, verifySchema, canonicalize } from './schema.js';
 export type { SchemaSignature, SchemaVerifyResult } from './schema.js';
 export { runSandboxCheck, extractCodeBlocks } from './sandbox.js';
 export type { SandboxCheckResult, SandboxAttestation } from './sandbox.js';
+export {
+  CALIBRATED_NORMALIZE_SYSTEM,
+  CALIBRATED_NORMALIZE_USER_TEMPLATE,
+  buildCalibratedNormalizePrompt,
+  parseCalibratedNormalizeOutput,
+} from './prompts/calibrated-normalize.js';
+export type { NormalizeInput, NormalizeOutput } from './prompts/calibrated-normalize.js';

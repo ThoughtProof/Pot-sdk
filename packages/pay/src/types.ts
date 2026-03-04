@@ -37,6 +37,17 @@ export interface PayVerifyOptions {
    * Example: "Agent managing cloud infrastructure costs for ACME Corp"
    */
   context?: string;
+  /**
+   * Use DSPy-optimized calibrated normalize as final verdict step.
+   * Runs after all verifiers and replaces consensus voting with an LLM-powered
+   * normalization call (90% adversarial detection vs ~51% weighted-vote baseline).
+   *
+   * Requires a `normalizeProvider` in `providers` with role "normalize", or uses
+   * the first provider as fallback.
+   *
+   * @default false
+   */
+  useCalibratedNormalize?: boolean;
 }
 
 export interface PayVerifyResult {

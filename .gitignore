@@ -7,3 +7,4 @@ test-sdk.mjs
 test-*.mjs
 .env*
 packages/friend/.npmrc
+packages/graph/.npmrc
