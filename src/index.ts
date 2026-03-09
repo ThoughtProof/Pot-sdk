@@ -7,6 +7,14 @@ export { calibrateConfidence } from './calibration.js';
 export type { CalibrationResult } from './calibration.js';
 export { factCheckCritic } from './pipeline/factcheck.js';
 export type { FactCheckedObjection, FactCheckResult } from './pipeline/factcheck.js';
+export { runGuard } from './pipeline/guard.js';
+export type { GuardResult } from './pipeline/guard.js';
+export { runExtractor, extractFeaturesStatic, reconstructFromFeatures, validateExtractedClaims } from './pipeline/extractor.js';
+export { aggregateFromReasoning } from './pipeline/aggregator.js';
+export type { AggregationResult, AggregationSignal } from './pipeline/aggregator.js';
+export { diversifyInput } from './pipeline/diversifier.js';
+export type { DiversifiedInput, RepresentationType } from './pipeline/diversifier.js';
+export type { ExtractedFeature, ExtractionResult } from './pipeline/extractor.js';
 export * from './verify.js';
 export { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
 export { deepAnalysis } from './deep.js';
@@ -30,3 +38,17 @@ export {
   parseCalibratedNormalizeOutput,
 } from './prompts/calibrated-normalize.js';
 export type { NormalizeInput, NormalizeOutput } from './prompts/calibrated-normalize.js';
+
+// ── ERC-8004 Validation Provider ───────────────────────────────────────────
+export {
+  toValidationRecord,
+  buildEvidence,
+  createTrustDeclaration,
+  getFinalityLevel,
+} from './erc8004.js';
+export type {
+  ERC8004ValidationRecord,
+  ERC8004TrustDeclaration,
+  ERC8004Evidence,
+  ERC8004Options,
+} from './erc8004.js';

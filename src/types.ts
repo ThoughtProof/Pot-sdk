@@ -239,6 +239,8 @@ export interface VerificationResult {
   calibrativeReason?: string;
   /** v0.6.1+: Pipeline-formatted result when audience: 'pipeline' */
   pipelineResult?: PipelineResult;
+  /** v0.6.3+: LLM injection guard result (Anthropic Sectioning pattern) */
+  guard?: { injected: boolean; confidence: number; evidence: string | null; model: string; latencyMs: number };
   /** v0.3+: Pipeline execution details */
   pipeline?: {
     mode: VerificationMode;

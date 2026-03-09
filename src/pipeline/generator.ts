@@ -58,15 +58,31 @@ export async function runGenerators(
   question: string,
   language: 'de' | 'en' = 'de',
   dryRun: boolean = false,
-  contextText?: string
+  contextText?: string,
+  /**
+   * v1.1: Diversified inputs — one per generator.
+   * If provided, each generator gets a different representation of the claim.
+   * If not provided, all generators get the same question (backward compat).
+   * Credit: voipbin-cco — "running them on different data snapshots"
+   */
+  diversifiedInputs?: Array<{ type: string; content: string }>,
 ): Promise<Proposal[]> {
-  const promises = providers.map(({ provider, model }) =>
-    runGenerator(provider, model, question, language, dryRun, contextText)
+  const promises = providers.map(({ provider, model }, index) => {
+    // Use diversified input if available, otherwise fall back to original question
+    const inputForThisGenerator = diversifiedInputs?.[index]?.content ?? question;
+    const repType = diversifiedInputs?.[index]?.type;
+
+    return runGenerator(provider, model, inputForThisGenerator, language, dryRun, contextText)
+      .then(proposal => ({
+        ...proposal,
+        // Tag the proposal with its representation type for transparency
+        ...(repType && repType !== 'original' ? { representationType: repType } : {}),
+      }))
       .catch((error: Error) => ({
         model: model.split('/').pop() || model,
         content: `[ERROR] ${provider.name} (${model}) failed: ${error.message}`,
-      }))
-  );
+      }));
+  });
 
   const results = await Promise.all(promises);
   const successful = results.filter(r => !r.content.startsWith('[ERROR]'));

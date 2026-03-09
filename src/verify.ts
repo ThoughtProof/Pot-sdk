@@ -12,6 +12,14 @@ import { parseConfidence, computeMdi } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
 import { runSandboxCheck } from './sandbox.js';
 import { calibrateConfidence } from './calibration.js';
+import { runGuard } from './pipeline/guard.js';
+import type { GuardResult } from './pipeline/guard.js';
+import { runExtractor, extractFeaturesStatic, reconstructFromFeatures } from './pipeline/extractor.js';
+import type { ExtractionResult } from './pipeline/extractor.js';
+import { aggregateFromReasoning } from './pipeline/aggregator.js';
+import type { AggregationResult } from './pipeline/aggregator.js';
+import { diversifyInput } from './pipeline/diversifier.js';
+import type { DiversifiedInput } from './pipeline/diversifier.js';
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -130,6 +138,32 @@ interface VerifyParams {
    * Credit: Moltbook "Not all friction" discussion — @carbondialogue et al.
    */
   audience?: Audience;
+  /**
+   * v0.6.3+: LLM-based injection guard (Anthropic Sectioning pattern).
+   * Runs a separate cheap LLM call BEFORE verification to detect prompt injection.
+   * Set to false to disable. Defaults to true when providers are configured.
+   * Credit: Anthropic "Building Effective Agents" — Parallelization/Sectioning
+   */
+  guard?: boolean;
+  /**
+   * v1.1+: Out-of-band feature extraction (voipbin-cco STIR/SHAKEN pattern).
+   * Extracts structured claims from raw content BEFORE verification.
+   * Verifiers see extracted features, not raw text — injections in raw
+   * content cannot reach verifiers.
+   * Set to true to enable. Defaults to false (opt-in for v1.1, planned default-on in v2.0).
+   * Falls back to static extraction if LLM extraction fails.
+   * Credit: voipbin-cco (Moltbook) — "The Identity header, not the audio stream"
+   */
+  extractFeatures?: boolean;
+  /**
+   * v1.1+: Input representation diversity (voipbin-cco common-mode failure pattern).
+   * Each generator receives a structurally different representation of the claim:
+   * original, skeptical, structured, inverted, factual-core.
+   * An injection crafted for one representation won't work on others.
+   * Set to true to enable. Defaults to false (opt-in for v1.1).
+   * Credit: voipbin-cco — "running them on different data snapshots"
+   */
+  diversifyInputs?: boolean;
 }
 
 /**
@@ -210,9 +244,77 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // Injection patterns can bypass semantic analysis, so we check here first.
   const adversarialScan = scanForAdversarialPatterns(output);
 
+  // v0.6.3: LLM-based injection guard (Anthropic Sectioning pattern)
+  // Runs as SEPARATE model call before verification — not the verifier itself.
+  // "One model screens for inappropriate content while another processes queries.
+  //  This tends to perform better." — Anthropic, Building Effective Agents
+  let guardResult: GuardResult | undefined;
+  if (params.guard !== false && Array.isArray(params.providers) && params.providers.length > 0) {
+    try {
+      // Use the first/cheapest provider for guard duty
+      const guardConfig = params.providers[0];
+      const guardProvider = createProviderFromConfig(guardConfig);
+      guardResult = await runGuard(guardProvider, guardConfig.model, output + '\n\n' + question);
+      if (guardResult.injected) {
+        console.warn(`[pot-sdk] ⚠️ Injection detected by guard (${guardResult.model}): ${guardResult.evidence}`);
+      }
+    } catch (err) {
+      // Guard failure = don't block, continue with verification
+      console.warn('[pot-sdk] Guard check failed, continuing:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  // v1.1: Out-of-band feature extraction (STIR/SHAKEN pattern)
+  // Extract structured claims from raw content BEFORE it enters the pipeline.
+  // Verifiers see features, not raw text. Credit: voipbin-cco (Moltbook)
+  let extractionResult: ExtractionResult | undefined;
+  let sanitizedOutput = output;
+
+  if (params.extractFeatures === true && Array.isArray(params.providers) && params.providers.length > 0) {
+    try {
+      // Use a DIFFERENT provider than the guard to avoid common-mode failure.
+      // Guard uses providers[0], extractor uses providers[1] (or [0] if only one available).
+      // Credit: Steel Man review — "Guard + Extractor = same provider = common-mode failure"
+      const providerList = params.providers as ProviderConfig[];
+      const extractorConfig = providerList.length > 1 ? providerList[1] : providerList[0];
+      const extractorProvider = createProviderFromConfig(extractorConfig);
+      // Pass adversarial scanner for post-extraction validation
+      const scanFn = (text: string) => {
+        const scan = scanForAdversarialPatterns(text);
+        return { detected: scan.detected, patterns: scan.patterns };
+      };
+      extractionResult = await runExtractor(extractorProvider, extractorConfig.model, output, scanFn);
+      if (extractionResult.claimCount > 0) {
+        sanitizedOutput = extractionResult.sanitizedContent;
+      }
+      // If extraction found 0 claims but LLM succeeded, the content may be pure noise/injection
+      if (extractionResult.llmExtracted && extractionResult.claimCount === 0) {
+        console.warn('[pot-sdk] ⚠️ Feature extractor found 0 claims — content may be empty or injection-only');
+      }
+    } catch (err) {
+      // Extraction failure = fall back to raw output (don't block pipeline)
+      console.warn('[pot-sdk] Feature extraction failed, using raw output:', err instanceof Error ? err.message : err);
+      // Static fallback
+      const staticFeatures = extractFeaturesStatic(output);
+      if (staticFeatures.length > 0) {
+        sanitizedOutput = reconstructFromFeatures(staticFeatures);
+        extractionResult = {
+          features: staticFeatures,
+          sanitizedContent: sanitizedOutput,
+          model: 'static',
+          latencyMs: 0,
+          claimCount: staticFeatures.length,
+          llmExtracted: false,
+          rejectedClaims: 0,
+          rejectionReasons: [],
+        };
+      }
+    }
+  }
+
   // WASM sandbox check — runs in parallel with pipeline (opt-in via params.sandbox)
   const sandboxPromise = params.sandbox
-    ? runSandboxCheck(output)
+    ? runSandboxCheck(output)  // Note: sandbox still checks raw output (it's code analysis, not semantic)
     : Promise.resolve(null);
 
   // ── v0.2: ProviderConfig[] path ──────────────────────────────────────────
@@ -284,9 +386,25 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const generatorModelNames = gensProviders.map(g => g.model);
 
   // ── Run pipeline ─────────────────────────────────────────────────────────
-  let proposals: Proposal[] = await runGenerators(gensProviders, question, lang);
+  // v1.1: Diversify inputs if enabled — each generator gets a different representation
+  // Fix 6 (Steel Man): When BOTH extractFeatures and diversifyInputs are active,
+  // diversify the SANITIZED output, not the raw claim. This is true defense-in-depth:
+  // Layer 1 removes injections → Layer 3 diversifies the clean features.
+  let diversifiedInputsForGenerators: DiversifiedInput[] | undefined;
+  if (params.diversifyInputs === true && gensProviders.length > 1) {
+    // If extraction produced a sanitized version, diversify that instead of raw question
+    const inputToDiversify = (params.extractFeatures === true && extractionResult?.claimCount && extractionResult.claimCount > 0)
+      ? extractionResult.sanitizedContent
+      : question;
+    diversifiedInputsForGenerators = diversifyInput(inputToDiversify, gensProviders.length, lang);
+  }
+
+  let proposals: Proposal[] = await runGenerators(gensProviders, question, lang, false, undefined, diversifiedInputsForGenerators);
   if (output) {
-    proposals.push({ model: 'user-output', content: output });
+    // v1.1: Use sanitized (feature-extracted) output instead of raw content.
+    // Raw content may contain injections; sanitized content is structured claims only.
+    // Credit: voipbin-cco — "out-of-band verification"
+    proposals.push({ model: 'user-output', content: sanitizedOutput });
   }
 
   // v0.5: Domain profile defaults
@@ -377,8 +495,24 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const genProposals = proposals.filter(p => p.model !== 'user-output');
   const balance = computeSynthesisBalance(genProposals, synthesis.content);
   const mdi = computeMdi(genProposals);
-  const confidence = parseConfidence(synthesis.content);
+  const statedConfidence = parseConfidence(synthesis.content);
   const dpr = computeDPR(critique.content, synthesis.content, balance.warning);
+
+  // v1.1: Reasoning-based aggregation — derive independent confidence from patterns
+  // instead of trusting the synthesizer's stated number.
+  // Credit: voipbin-cco — "fool the consensus mechanism, not individual verifiers"
+  const aggregation = aggregateFromReasoning(
+    genProposals,
+    critique.content,
+    synthesis.content,
+    statedConfidence,
+    classifyObjections ? parseClassifiedObjections(critique.content) : undefined,
+  );
+
+  // Use aggregated confidence if it detects the stated value is inflated
+  const confidence = aggregation.shouldOverride
+    ? aggregation.aggregatedConfidence
+    : statedConfidence;
 
   const flags: VerificationFlag[] = [];
 
@@ -407,9 +541,29 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     flags.push(...sandboxResult.flags);
   }
 
-  // Cap confidence if adversarial patterns detected
-  const finalConfidence = adversarialScan.detected
-    ? Math.min(confidence, adversarialScan.confidence_cap)
+  // v1.1: Feature extraction flags
+  if (extractionResult?.llmExtracted && extractionResult.claimCount === 0) {
+    flags.push('empty-extraction');
+  }
+
+  // v1.1: Reasoning aggregation flags
+  if (aggregation.divergesFromStated) {
+    flags.push('confidence-divergence');
+  }
+  if (aggregation.shouldOverride) {
+    flags.push('confidence-overridden');
+  }
+
+  // v0.6.3: LLM guard injection flag
+  if (guardResult?.injected) {
+    flags.push('injection-detected');
+    flags.push(`guard:${guardResult.model}`);
+  }
+
+  // Cap confidence if adversarial patterns detected (static OR LLM guard)
+  const guardCap = guardResult?.injected ? 0.25 : 1.0;
+  const finalConfidence = (adversarialScan.detected || guardResult?.injected)
+    ? Math.min(confidence, adversarialScan.confidence_cap, guardCap)
     : confidence;
 
   // v0.5: Apply domain maxConfidence cap
@@ -419,7 +573,16 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   }
 
   // v0.6: Auto-calibration — entropy-based confidence adjustment
-  const calibration = calibrateConfidence(cappedConfidence, synthesis.content);
+  // v1.1: Skip hedging-based calibration when aggregation already overrode confidence,
+  // because both analyze hedging language → double-counting would deflate unfairly.
+  // Credit: Steel Man review — "Calibration and Aggregation do the same thing on hedging"
+  let calibration: ReturnType<typeof calibrateConfidence>;
+  if (aggregation.shouldOverride) {
+    // Aggregation already corrected for hedging — skip calibration to avoid double-count
+    calibration = { calibratedConfidence: cappedConfidence, adjusted: false, delta: 0, originalConfidence: cappedConfidence, reason: 'skipped: aggregation override active' };
+  } else {
+    calibration = calibrateConfidence(cappedConfidence, synthesis.content);
+  }
   let finalCalibratedConfidence = calibration.calibratedConfidence;
   if (calibration.reason && !calibration.adjusted && calibration.reason.includes('mismatch')) {
     flags.push('calibration-mismatch');
@@ -493,8 +656,18 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       synthesizer: synthModel,
       rounds: params.multiRound ? (mode === 'deep' ? 3 : 2) : (mode === 'deep' ? 2 : 1),
       duration_ms: durationMs,
+      ...(diversifiedInputsForGenerators ? { diversifiedInputs: diversifiedInputsForGenerators.map(d => d.type) } : {}),
     },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
+    ...(guardResult ? { guard: guardResult } : {}),
+    ...(extractionResult ? { extraction: { model: extractionResult.model, claimCount: extractionResult.claimCount, llmExtracted: extractionResult.llmExtracted, latencyMs: extractionResult.latencyMs, rejectedClaims: extractionResult.rejectedClaims, ...(extractionResult.rejectionReasons.length > 0 ? { rejectionReasons: extractionResult.rejectionReasons } : {}) } } : {}),
+    aggregation: {
+      statedConfidence: statedConfidence,
+      aggregatedConfidence: aggregation.aggregatedConfidence,
+      divergence: aggregation.divergenceAmount,
+      overridden: aggregation.shouldOverride,
+      signals: aggregation.signals.map(s => ({ name: s.name, value: s.value, weight: s.weight, reason: s.reason })),
+    },
     ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
     ...(effectiveDomain ? { domain: effectiveDomain } : {}),
     ...(outputFormat !== 'human' ? { outputFormat } : {}),
