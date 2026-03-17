@@ -208,6 +208,68 @@ Rules:
 PROPOSALS TO CALIBRATE:
 {proposals}`;
 
+// ── Proportional Mode: "Only flag material defects" ────────────────────────
+// Credit: ThoughtProof PoC 2026-03-14 — "Blocking weak decisions is easier than proving strong ones"
+// The adversarial critic always finds reasons to doubt. The proportional critic asks:
+// "Is there a MATERIAL reason this decision should be blocked?"
+const PROPORTIONAL_PROMPT_DE = `Du bist ein proportionaler Reviewer. Deine Aufgabe ist NICHT, jede mögliche Schwäche zu finden.
+
+Deine Aufgabe: Prüfe ob es einen MATERIELLEN DEFEKT gibt, der diese Entscheidung blockieren sollte.
+
+{context}
+
+DEFINITION VON MATERIELL:
+Ein Defekt ist materiell wenn er:
+- die Entscheidung grundsätzlich falsch macht (nicht nur unvollständig)
+- auf einer nachweislich falschen Tatsache basiert
+- eine offensichtlich bessere Alternative ignoriert
+- gegen eine klare Richtlinie oder Policy verstößt
+- ein Risiko schafft das UNVERHÄLTNISMÄSSIG zu den Stakes ist
+
+Ein Defekt ist NICHT materiell wenn er:
+- eine wünschenswerte Verbesserung ist, die aber nicht blockierend sein sollte
+- auf einer Informationslücke basiert die für die Stakes-Ebene unverhältnismäßig wäre zu schließen
+- eine theoretische Schwäche ist die in der Praxis keine Konsequenz hat
+
+BEWERTUNGSREGEL:
+- Wenn KEIN materieller Defekt gefunden wird: Score 8-10
+- Wenn ein materieller Defekt gefunden wird: Score 1-5 mit Erklärung
+
+Sei fair. Eine Entscheidung muss nicht perfekt sein um gut genug zu sein.
+Die Frage ist nicht "könnte das besser sein?" sondern "gibt es einen Grund das zu stoppen?"
+
+PROPOSALS:
+{proposals}`;
+
+const PROPORTIONAL_PROMPT_EN = `You are a proportional reviewer. Your task is NOT to find every possible weakness.
+
+Your task: Check whether there is a MATERIAL DEFECT that should block this decision.
+
+{context}
+
+DEFINITION OF MATERIAL:
+A defect is material if it:
+- makes the decision fundamentally wrong (not just incomplete)
+- is based on a demonstrably false fact
+- ignores an obviously better alternative
+- violates a clear guideline or policy
+- creates risk that is DISPROPORTIONATE to the stakes
+
+A defect is NOT material if it:
+- is a desirable improvement that shouldn't be blocking
+- is based on an information gap that would be disproportionate to close given the stakes
+- is a theoretical weakness with no practical consequence
+
+SCORING RULE:
+- If NO material defect is found: Score 8-10
+- If a material defect IS found: Score 1-5 with explanation
+
+Be fair. A decision does not need to be perfect to be good enough.
+The question is not "could this be better?" but "is there a reason to stop this?"
+
+PROPOSALS:
+{proposals}`;
+
 // ── Prompt selection by mode and language ───────────────────────────────────
 function selectCriticPrompt(criticMode: CriticMode, language: 'de' | 'en'): string {
   const prompts: Record<CriticMode, Record<'de' | 'en', string>> = {
@@ -215,6 +277,7 @@ function selectCriticPrompt(criticMode: CriticMode, language: 'de' | 'en'): stri
     resistant:    { de: RESISTANT_PROMPT_DE, en: RESISTANT_PROMPT_EN },
     balanced:     { de: BALANCED_PROMPT_DE, en: BALANCED_PROMPT_EN },
     calibrative:  { de: CALIBRATIVE_PROMPT_DE, en: CALIBRATIVE_PROMPT_EN },
+    proportional: { de: PROPORTIONAL_PROMPT_DE, en: PROPORTIONAL_PROMPT_EN },
   };
   return prompts[criticMode][language];
 }
@@ -246,7 +309,7 @@ export async function runCritic(
   dryRun: boolean = false,
   contextText?: string,
   criticMode: CriticMode = 'adversarial',
-  options?: { requireCitation?: boolean; classifyObjections?: boolean }
+  options?: { requireCitation?: boolean; classifyObjections?: boolean; classifyMateriality?: boolean; trustContext?: { trusted?: string; toVerify?: string } }
 ): Promise<Critique> {
   if (dryRun) {
     return {
@@ -265,6 +328,17 @@ export async function runCritic(
     .replace('{context}', contextSection)
     .replace('{proposals}', proposalsText);
 
+  // v1.2: Trust boundary injection
+  // ⚠️ SECURITY: trustContext.trusted is injected verbatim into the prompt.
+  // Callers MUST sanitize this value if it originates from external/user input.
+  // Prompt injection risk: adversarial input in trusted context could manipulate critic output.
+  if (options?.trustContext?.trusted) {
+    const trustLang = language === 'de'
+      ? `\n\nVERTRAUENSWÜRDIGER KONTEXT (als gegeben akzeptieren, NICHT anzweifeln):\n${options.trustContext.trusted}\n\nZU PRÜFENDE ENTSCHEIDUNG:\n${options.trustContext.toVerify || '(siehe Proposals)'}\n\nDeine Aufgabe: Prüfe ob die ENTSCHEIDUNG logisch und proportional aus dem VERTRAUENSWÜRDIGEN KONTEXT folgt. Zweifle NICHT an den gegebenen Fakten. Zweifle NUR an der Schlussfolgerung.`
+      : `\n\nTRUSTED CONTEXT (accept as given, do NOT challenge these facts):\n${options.trustContext.trusted}\n\nDECISION TO VERIFY:\n${options.trustContext.toVerify || '(see proposals)'}\n\nYour task: Evaluate whether the DECISION follows logically and proportionally from the TRUSTED CONTEXT. Do NOT question whether the trusted facts are true. ONLY question whether the conclusion drawn from them is justified.`;
+    prompt += trustLang;
+  }
+
   if (options?.requireCitation) {
     prompt += `\n\nCITATION REQUIREMENT: For EVERY objection, you MUST cite the source text from the proposal.
 For explicit claims, quote the exact text: CITE: "[exact quote]" → OBJECTION: [your objection]
@@ -274,6 +348,32 @@ Objections without any citation format will be discarded.`;
   }
   if (options?.classifyObjections) {
     prompt += '\n\nCLASSIFICATION REQUIREMENT: For EVERY objection, classify it.\nFormat: [TYPE:factual|SEVERITY:critical] OBJECTION: [description]\nTypes: factual, logical, stylistic, evidential\nSeverities: critical, moderate, minor';
+  }
+
+  // v1.2.1: Materiality classification — the key calibration lever
+  // Credit: ISA 320, PCAOB AS 1105 — "materiality = the amount by which statements must be wrong to change the decision"
+  if (options?.classifyMateriality) {
+    prompt += `\n\nMATERIALITY CLASSIFICATION (CRITICAL — DO THIS FOR EVERY OBJECTION):
+For each objection you raise, you MUST classify its materiality level:
+
+[MATERIALITY:material] = If this objection is valid, the decision SHOULD CHANGE. This is a real flaw that makes the conclusion unreliable.
+[MATERIALITY:notable] = Worth flagging, but the decision remains DEFENSIBLE even if this objection holds. An improvement, not a requirement.
+[MATERIALITY:minor] = Technically valid but would NOT change any reasonable person's decision. Perfectionism, not risk.
+
+THE TEST: "Would a competent human reviewer, seeing this objection, CHANGE the decision?"
+If YES → material. If they'd NOTE it but PROCEED → notable. If they'd IGNORE it → minor.
+
+Format each objection as:
+[MATERIALITY:material|notable|minor] OBJECTION: [description]
+
+ALSO provide an OVERALL ASSESSMENT at the end:
+[OVERALL:sound|adequate|questionable|deficient]
+- sound = no material objections, reasoning is solid
+- adequate = no material objections, but notable improvements possible
+- questionable = borderline material issues, decision is debatable
+- deficient = material objections found, decision should not proceed
+
+When in doubt between material and notable, classify as MATERIAL. The system's bias should remain conservative.`;
   }
 
   const response = await provider.call(model, prompt);
@@ -304,4 +404,65 @@ export function parseClassifiedObjections(critiqueContent: string): ClassifiedOb
     });
   }
   return results;
+}
+// ── v1.2.1: Materiality parsing ────────────────────────────────────────────
+// Credit: ISA 320 / PCAOB AS 1105 — "materiality = threshold below which misstatements don't change the decision"
+
+export type MaterialityLevel = 'material' | 'notable' | 'minor';
+export type OverallAssessment = 'sound' | 'adequate' | 'questionable' | 'deficient';
+
+export interface MaterialityObjection {
+  materiality: MaterialityLevel;
+  description: string;
+}
+
+export interface MaterialityResult {
+  objections: MaterialityObjection[];
+  materialCount: number;
+  notableCount: number;
+  minorCount: number;
+  hasMaterialDefect: boolean;
+  overallAssessment: OverallAssessment;
+}
+
+export function parseMaterialityClassifications(critiqueContent: string): MaterialityResult {
+  const pattern = /\[MATERIALITY:(material|notable|minor)\]\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[OVERALL:|\n\n|$)/gs;
+  const objections: MaterialityObjection[] = [];
+  let match;
+  while ((match = pattern.exec(critiqueContent)) !== null) {
+    objections.push({
+      materiality: match[1] as MaterialityLevel,
+      description: match[2].trim().slice(0, 800),
+    });
+  }
+
+  // Parse overall assessment
+  const overallMatch = critiqueContent.match(/\[OVERALL:(sound|adequate|questionable|deficient)\]/i);
+  const overallAssessment: OverallAssessment = (overallMatch?.[1]?.toLowerCase() as OverallAssessment) || 'questionable';
+
+  const materialCount = objections.filter(o => o.materiality === 'material').length;
+  const notableCount = objections.filter(o => o.materiality === 'notable').length;
+  const minorCount = objections.filter(o => o.materiality === 'minor').length;
+
+  return {
+    objections,
+    materialCount,
+    notableCount,
+    minorCount,
+    hasMaterialDefect: materialCount > 0,
+    overallAssessment,
+  };
+}
+
+/**
+ * v1.2.1: Calculate confidence from materiality-weighted objections.
+ * material = -0.30, notable = -0.10, minor = -0.02
+ * Replaces the flat confidence when materiality data is available.
+ */
+export function calculateMaterialityConfidence(result: MaterialityResult): number {
+  const penalty =
+    result.materialCount * 0.30 +
+    result.notableCount * 0.10 +
+    result.minorCount * 0.02;
+  return Math.max(0, Math.min(1.0, 1.0 - penalty));
 }

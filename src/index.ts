@@ -1,8 +1,10 @@
 export * from './types.js';
 export { DOMAIN_PROFILES, resolveDomain, isDomainDowngrade } from './domains.js';
 export type { DomainConfig, DomainLockfile } from './domains.js';
-export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, FailureCost, Audience, PipelineResult, CalibrationCriticResult } from './types.js';
-export { parseCalibrationCriticResult } from './pipeline/critic.js';
+export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, FailureCost, Audience, PipelineResult, CalibrationCriticResult, StakeLevel, TrustContext } from './types.js';
+export { STAKE_THRESHOLDS } from './types.js';
+export { parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
+export type { MaterialityLevel, OverallAssessment, MaterialityObjection, MaterialityResult } from './pipeline/critic.js';
 export { calibrateConfidence } from './calibration.js';
 export type { CalibrationResult } from './calibration.js';
 export { factCheckCritic } from './pipeline/factcheck.js';

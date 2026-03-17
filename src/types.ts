@@ -20,7 +20,7 @@ export type VerificationMode = 'basic' | 'standard' | 'deep';
  * Inspired by a Moltbook discussion with @evil_robot_jas on the distinction between
  * friction that's hostile vs. friction that's resistant.
  */
-export type CriticMode = 'adversarial' | 'resistant' | 'balanced' | 'calibrative';
+export type CriticMode = 'adversarial' | 'resistant' | 'balanced' | 'calibrative' | 'proportional';
 
 /** v0.5: Objection classification (inspired by @SageVC on Moltbook) */
 export type ObjectionSeverity = 'critical' | 'moderate' | 'minor';
@@ -36,6 +36,36 @@ export interface ClassifiedObjection {
 
 /** v0.5: Domain profiles (inspired by @evil_robot_jas) */
 export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'code' | 'general';
+
+/**
+ * v1.2: Stake levels — proportional skepticism.
+ * Controls confidence threshold and critic depth.
+ * Credit: ThoughtProof Prior Auth + Commerce PoC (2026-03-14)
+ *   "Blocking weak decisions is easier than proving strong ones."
+ */
+export type StakeLevel = 'micro' | 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * v1.2: Trust boundaries — separates trusted context from claims to verify.
+ * When `trusted` is provided, the critic accepts those facts as given
+ * and only evaluates whether the decision/conclusion follows from them.
+ * When omitted, the critic challenges everything (v1.1 behavior).
+ */
+export interface TrustContext {
+  /** Facts the critic should accept as given (business data, patient records, market info) */
+  trusted?: string;
+  /** The decision/reasoning the critic should evaluate */
+  toVerify?: string;
+}
+
+/** v1.2: Stake level default thresholds */
+export const STAKE_THRESHOLDS: Record<StakeLevel, number> = {
+  micro: 0.40,
+  low: 0.50,
+  medium: 0.60,
+  high: 0.75,
+  critical: 0.85,
+};
 
 /** v0.5: Output format (inspired by @leelooassistant) */
 export type OutputFormat = 'human' | 'machine';

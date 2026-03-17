@@ -1,7 +1,8 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
 import { DOMAIN_PROFILES, checkToxicCombination, resolveDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
-import { parseClassifiedObjections, parseCalibrationCriticResult } from './pipeline/critic.js';
+import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
+import type { MaterialityResult } from './pipeline/critic.js';
 import { factCheckCritic } from './pipeline/factcheck.js';
 import { runGenerators } from './pipeline/generator.js';
 import { runCritic } from './pipeline/critic.js';
@@ -164,6 +165,26 @@ interface VerifyParams {
    * Credit: voipbin-cco — "running them on different data snapshots"
    */
   diversifyInputs?: boolean;
+  /**
+   * v1.2.1+: Classify objections by materiality (material/notable/minor).
+   * When enabled, confidence is recalculated based on materiality weights.
+   * Credit: ISA 320 / PCAOB AS 1105 — "materiality = threshold for decision-changing"
+   */
+  classifyMateriality?: boolean;
+  /**
+   * v1.2+: Trust boundaries — separates trusted context from claims to verify.
+   * When context.trusted is provided, the critic accepts those facts as given
+   * and only evaluates whether the decision follows from them.
+   * When omitted, critic challenges everything (v1.1 behavior preserved).
+   * Credit: ThoughtProof Prior Auth + Commerce PoC (2026-03-14)
+   */
+  context?: import('./types.js').TrustContext;
+  /**
+   * v1.2+: Stake level for proportional skepticism.
+   * Controls the confidence threshold needed for ALLOW.
+   * If omitted, falls back to domain profile default or failureCost mapping.
+   */
+  stakeLevel?: import('./types.js').StakeLevel;
 }
 
 /**
@@ -421,8 +442,15 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const receptiveMode = params.receptiveMode ?? domainConfig?.receptiveMode;
   const outputFormat = params.outputFormat ?? 'human';
 
+  // v1.2: Proportional critic mode for low-stakes decisions
+  // If stakeLevel is micro/low and no explicit criticMode set, use proportional
+  // This prevents the critic from over-blocking well-justified low-stakes decisions
+  // Note: 'medium' intentionally excluded — auto-downgrade to proportional would be a silent breaking change
+  const stakeLevelLower = params.stakeLevel;
+  const useProportional = (stakeLevelLower === 'micro' || stakeLevelLower === 'low') && !params.criticMode;
+
   // v0.6: Toxic combination auto-correction (upgrade from v0.5.1 warning-only)
-  let effectiveCriticMode = criticMode;
+  let effectiveCriticMode = useProportional ? 'proportional' as CriticMode : criticMode;
   let effectiveReceptiveMode = receptiveMode;
   let toxicCorrected: any = undefined;
   const toxicWarning = effectiveReceptiveMode ? checkToxicCombination(effectiveCriticMode, effectiveReceptiveMode) : null;
@@ -442,7 +470,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     };
   }
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections });
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context });
 
   // v0.6: Multi-round fact-checking — the critic gets checked
   let factCheckedObjections: import('./pipeline/factcheck.js').FactCheckedObjection[] | undefined;
@@ -605,10 +633,36 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // v0.5: Parse classified objections if enabled
   const classifiedObjs = classifyObjections ? parseClassifiedObjections(critique.content) : undefined;
 
-  // v0.6: failureCost-adjusted verdict thresholds
-  const verdictThreshold = params.failureCost
-    ? FAILURE_COST_THRESHOLDS[params.failureCost]
-    : 0.70;
+  // v1.2.1: Materiality-based confidence override
+  // If materiality classification is enabled, recalculate confidence based on materiality weights
+  // This replaces the synthesis-based confidence for ALLOW/HOLD decisions
+  let materialityResult: MaterialityResult | undefined;
+  if (params.classifyMateriality) {
+    materialityResult = parseMaterialityClassifications(critique.content);
+    const materialityConfidence = calculateMaterialityConfidence(materialityResult);
+
+    // Use materiality confidence if it's HIGHER than synthesis confidence
+    // (materiality should promote ALLOW when no material defects exist, not demote)
+    // If material defects ARE found, take the LOWER of the two (conservative)
+    if (materialityResult.hasMaterialDefect) {
+      finalCalibratedConfidence = Math.min(finalCalibratedConfidence, materialityConfidence);
+    } else {
+      // No material defects → use materiality confidence (likely higher)
+      // But cap it based on overall assessment
+      const assessmentCaps: Record<string, number> = { sound: 0.95, adequate: 0.80, questionable: 0.60, deficient: 0.30 };
+      const cap = assessmentCaps[materialityResult.overallAssessment] ?? 0.60;
+      finalCalibratedConfidence = Math.min(cap, Math.max(finalCalibratedConfidence, materialityConfidence));
+    }
+  }
+
+  // v1.2: stakeLevel takes precedence, then failureCost, then default
+  // Import STAKE_THRESHOLDS inline to avoid circular deps
+  const STAKE_THRESHOLDS_MAP: Record<string, number> = { micro: 0.40, low: 0.50, medium: 0.60, high: 0.75, critical: 0.85 };
+  const verdictThreshold = params.stakeLevel
+    ? (STAKE_THRESHOLDS_MAP[params.stakeLevel] ?? 0.70)
+    : params.failureCost
+      ? FAILURE_COST_THRESHOLDS[params.failureCost]
+      : 0.70;
 
   // v0.3+v0.6: Compute verdict enum with failureCost-aware thresholds
   let verdict: Verdict;
@@ -669,6 +723,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       signals: aggregation.signals.map(s => ({ name: s.name, value: s.value, weight: s.weight, reason: s.reason })),
     },
     ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
+    ...(materialityResult ? { materiality: materialityResult } : {}),
     ...(effectiveDomain ? { domain: effectiveDomain } : {}),
     ...(outputFormat !== 'human' ? { outputFormat } : {}),
     ...(factCheckedObjections ? { factCheckedObjections } : {}),
