@@ -1,5 +1,5 @@
 export * from './types.js';
-export { DOMAIN_PROFILES, resolveDomain, isDomainDowngrade } from './domains.js';
+export { DOMAIN_PROFILES, DOMAIN_REFERENCE_CONTEXT, resolveDomain, isDomainDowngrade, detectDomain } from './domains.js';
 export type { DomainConfig, DomainLockfile } from './domains.js';
 export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, FailureCost, Audience, PipelineResult, CalibrationCriticResult, StakeLevel, TrustContext } from './types.js';
 export { STAKE_THRESHOLDS } from './types.js';

@@ -35,7 +35,7 @@ export interface ClassifiedObjection {
 }
 
 /** v0.5: Domain profiles (inspired by @evil_robot_jas) */
-export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'code' | 'general';
+export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'code' | 'general' | 'agentic';
 
 /**
  * v1.2: Stake levels — proportional skepticism.
@@ -271,6 +271,10 @@ export interface VerificationResult {
   pipelineResult?: PipelineResult;
   /** v0.6.3+: LLM injection guard result (Anthropic Sectioning pattern) */
   guard?: { injected: boolean; confidence: number; evidence: string | null; model: string; latencyMs: number };
+  /** v1.3+: Sub-verdicts from recursive claim decomposition (present when recursive: true triggered decomposition) */
+  subVerdicts?: import('./pipeline/compositor.js').SubVerdict[];
+  /** v1.3+: Compositional risk level when recursive decomposition was applied */
+  compositionRisk?: import('./pipeline/compositor.js').CompositionalResult['compositionRisk'];
   /** v0.3+: Pipeline execution details */
   pipeline?: {
     mode: VerificationMode;

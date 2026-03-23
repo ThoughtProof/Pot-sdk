@@ -1,5 +1,5 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
-import { DOMAIN_PROFILES, checkToxicCombination, resolveDomain } from './domains.js';
+import { DOMAIN_PROFILES, DOMAIN_REFERENCE_CONTEXT, checkToxicCombination, resolveDomain, detectDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
 import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
 import type { MaterialityResult } from './pipeline/critic.js';
@@ -21,6 +21,9 @@ import { aggregateFromReasoning } from './pipeline/aggregator.js';
 import type { AggregationResult } from './pipeline/aggregator.js';
 import { diversifyInput } from './pipeline/diversifier.js';
 import type { DiversifiedInput } from './pipeline/diversifier.js';
+import { decomposeClaim } from './pipeline/decomposer.js';
+import { compositionalSynthesize } from './pipeline/compositor.js';
+import type { SubVerdict } from './pipeline/compositor.js';
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -185,6 +188,30 @@ interface VerifyParams {
    * If omitted, falls back to domain profile default or failureCost mapping.
    */
   stakeLevel?: import('./types.js').StakeLevel;
+  /**
+   * v1.3+: Recursive claim decomposition.
+   * When true, the claim is first analyzed for compound structure.
+   * If compound (>= minComplexity sub-claims), each sub-claim is verified
+   * independently and results are composed via compositionalSynthesize().
+   * Credit: RECURSIVE-VERIFY-SPEC.md, arxiv:2512.24601
+   */
+  recursive?: boolean;
+  /**
+   * v1.3+: Maximum recursion depth for nested compound claims.
+   * Prevents infinite recursion. Defaults to 2.
+   */
+  maxDepth?: number;
+  /**
+   * v1.3+: Minimum number of sub-claims required to trigger recursive verification.
+   * If decomposition yields fewer sub-claims, falls through to normal pipeline.
+   * Defaults to 3.
+   */
+  minComplexity?: number;
+  /**
+   * v1.3+: Internal recursion depth tracker. Do not set manually.
+   * Used to guard against infinite recursion across recursive verify() calls.
+   */
+  _recursionDepth?: number;
 }
 
 /**
@@ -254,6 +281,16 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (!question) {
     throw new Error('Either `claim` or `question` must be provided');
   }
+
+  // v1.4: Domain auto-detection + reference context injection
+  // Computed early so claimWithContext is available for generators.
+  // effectiveDomain is re-resolved later (after lockfile check); this is the pre-lockfile value
+  // used only for reference context — lockfile cannot downgrade domain, so context is safe.
+  const _earlyDomain = detectDomain(question);
+  const _earlyRefCtx = DOMAIN_REFERENCE_CONTEXT[params.domain ?? _earlyDomain];
+  const claimWithContext: string = _earlyRefCtx
+    ? `[Domain Context]\n${_earlyRefCtx}\n\n[Claim to Evaluate]\n${question}`
+    : question;
 
   const MAX_INPUT_LENGTH = { basic: 2000, standard: 8000, deep: 32000 };
   const maxLen = MAX_INPUT_LENGTH[mode] || MAX_INPUT_LENGTH.standard;
@@ -331,6 +368,83 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
         };
       }
     }
+  }
+
+  // ── v1.3: Recursive claim decomposition ──────────────────────────────────
+  // Runs AFTER guard + extraction but BEFORE generators.
+  // If the claim is compound and minComplexity sub-claims are found, each sub-claim
+  // is verified independently and results are merged via compositional synthesis.
+  // Credit: RECURSIVE-VERIFY-SPEC.md, arxiv:2512.24601
+  if (
+    params.recursive === true &&
+    Array.isArray(params.providers) &&
+    params.providers.length > 0 &&
+    (params._recursionDepth === undefined || params._recursionDepth < (params.maxDepth ?? 2))
+  ) {
+    const providerList = params.providers as import('./types.js').ProviderConfig[];
+    const minComplexity = params.minComplexity ?? 3;
+
+    const decomposition = await decomposeClaim(question, providerList);
+
+    if (decomposition.isCompound && decomposition.subClaims.length >= minComplexity) {
+      const subVerdicts: SubVerdict[] = [];
+
+      for (const subClaim of decomposition.subClaims) {
+        // Inherit stakeLevel from parent, but allow sub-claim to override if specified
+        const subStakeLevel = (subClaim.stakeLevel as import('./types.js').StakeLevel | undefined) ?? params.stakeLevel;
+
+        const subResult = await verify(output, {
+          ...params,
+          claim: subClaim.claim,
+          // Disable recursion for sub-verifications (guard against compound-in-compound)
+          recursive: false,
+          _recursionDepth: (params._recursionDepth ?? 0) + 1,
+          ...(subStakeLevel ? { stakeLevel: subStakeLevel } : {}),
+        });
+
+        subVerdicts.push({
+          claim: subClaim.claim,
+          verdict: subResult.verdict,
+          confidence: subResult.confidence,
+          synthesis: subResult.synthesis,
+          flags: subResult.flags,
+        });
+      }
+
+      const compResult = await compositionalSynthesize(
+        question,
+        subVerdicts,
+        decomposition.dependencies,
+        providerList,
+      );
+
+      // Build a VerificationResult from the compositional outcome
+      const compDurationMs = Date.now() - startTime;
+      const compVerified = compResult.verdict === 'VERIFIED';
+
+      const compVerificationResult: VerificationResult = {
+        verified: compVerified,
+        verdict: compResult.verdict,
+        confidence: compResult.confidence,
+        tier: tier,
+        flags: subVerdicts.flatMap(sv => (sv.flags ?? []).map(f => `subclaim:${f}`)),
+        timestamp: new Date().toISOString(),
+        synthesis: compResult.synthesis,
+        subVerdicts,
+        compositionRisk: compResult.compositionRisk,
+        pipeline: {
+          mode,
+          generators: [],
+          critic: 'compositional',
+          synthesizer: 'compositional',
+          rounds: 1,
+          duration_ms: compDurationMs,
+        },
+      };
+
+      return compVerificationResult;
+    }
+    // If not compound or not enough sub-claims → fall through to normal pipeline
   }
 
   // WASM sandbox check — runs in parallel with pipeline (opt-in via params.sandbox)
@@ -420,7 +534,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     diversifiedInputsForGenerators = diversifyInput(inputToDiversify, gensProviders.length, lang);
   }
 
-  let proposals: Proposal[] = await runGenerators(gensProviders, question, lang, false, undefined, diversifiedInputsForGenerators);
+  let proposals: Proposal[] = await runGenerators(gensProviders, claimWithContext, lang, false, undefined, diversifiedInputsForGenerators);
   if (output) {
     // v1.1: Use sanitized (feature-extracted) output instead of raw content.
     // Raw content may contain injections; sanitized content is structured claims only.
@@ -428,9 +542,16 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     proposals.push({ model: 'user-output', content: sanitizedOutput });
   }
 
+  // FAST PATH: basic mode — Generate (parallel) + Critic (fastest model) + skip Synthesizer
+  // Still does real adversarial critique, just faster: ~15s vs 37s full pipeline.
+  // basic mode: same pipeline as standard, just fewer providers (set upstream)
+
+
   // v0.5: Domain profile defaults
   // v0.5.1: Domain lockfile — resolve effective domain (ratchet, not slider)
-  const effectiveDomain = resolveDomain(params.domain, params.domainLockfile);
+  // v1.4: Auto-detect domain from claim text when not provided by caller
+  const autoDetectedDomain = !params.domain ? detectDomain(question) : undefined;
+  const effectiveDomain = resolveDomain(params.domain ?? autoDetectedDomain ?? 'general', params.domainLockfile);
   let domainConfig: DomainConfig | undefined;
   if (effectiveDomain) {
     domainConfig = DOMAIN_PROFILES[effectiveDomain];
@@ -470,7 +591,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     };
   }
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context });
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context }, gensProviders);
 
   // v0.6: Multi-round fact-checking — the critic gets checked
   let factCheckedObjections: import('./pipeline/factcheck.js').FactCheckedObjection[] | undefined;
@@ -499,7 +620,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   let synthesis: Synthesis;
   let dissent: any = undefined;
 
-  if (mode !== 'basic' && gensProviders.length >= 2) {
+  if (gensProviders.length >= 2) {
     const synth1 = gensProviders[0];
     const synth2 = gensProviders[1];
     const { primary, verification } = await runDualSynthesizer(
@@ -511,12 +632,10 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthesis = primary;
     dissent = verification;
   } else {
-    if (mode !== 'basic') {
-      dissent = {
-        dual_synthesis: false,
-        single_source_warning: "Only one provider available; dual synthesis skipped",
-      };
-    }
+    dissent = {
+      dual_synthesis: false,
+      single_source_warning: "Only one provider available; dual synthesis skipped",
+    };
     synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critiqueForSynthesis, lang, false, undefined, effectiveReceptiveMode);
   }
 
@@ -556,10 +675,31 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // Semantic flags from AI pipeline
   const UNVERIFIED_PATTERN = /\bunverified\b/i;
   if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
-  if (balance.warning) flags.push('synthesis-dominance');
+  // Only flag synthesis-dominance when 3+ generators exist — with 2 generators,
+  // some dominance is expected and should not block VERIFIED verdict.
+  if (balance.warning && gensProviders.length >= 3) flags.push('synthesis-dominance');
   if (dpr.false_consensus) flags.push('false-consensus');
   if (mdi < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
+
+  // v1.4: Disagreement Detection — when generators are split or no model is confident,
+  // override verdict to UNCERTAIN. Prevents a single confident synthesizer from masking
+  // genuine model disagreement (e.g. DeepSeek=HOLD, Gemini=ALLOW → result: UNCERTAIN).
+  //
+  // Trigger conditions (either):
+  //   1. Max individual proposal confidence < 0.80 (no model is sure)
+  //   2. Generator proposals are 50/50 split on allow vs. block keywords
+  const proposalContents = genProposals.map(p => p.content.toLowerCase());
+  const allowSignals  = proposalContents.filter(c => /\ballow\b|\bsafe\b|\brecommend\b/.test(c)).length;
+  const blockSignals  = proposalContents.filter(c => /\bblock\b|\bhold\b|\bdissent\b|\brisky\b|\bdanger/.test(c)).length;
+  const totalSignals  = allowSignals + blockSignals;
+  const splitRatio    = totalSignals > 0 ? Math.min(allowSignals, blockSignals) / totalSignals : 0;
+  const maxProposalConf = genProposals.reduce((max, p) => {
+    const c = parseConfidence(p.content);
+    return c > max ? c : max;
+  }, 0);
+  const hasDisagreement = splitRatio >= 0.4 || maxProposalConf < 0.50;
+  if (hasDisagreement) flags.push('generator-disagreement');
   if (toxicWarning) flags.push('toxic-combination');
   if (multiRoundSkipped) flags.push('multiround-same-provider');
 
@@ -664,10 +804,21 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       ? FAILURE_COST_THRESHOLDS[params.failureCost]
       : 0.70;
 
-  // v0.3+v0.6: Compute verdict enum with failureCost-aware thresholds
+  // v0.3+v0.6+v1.3.2: Compute verdict enum
+  // Material defects → UNVERIFIED regardless of confidence (strongest signal)
+  // False consensus → DISSENT
+  // High confidence + clean → VERIFIED
+  // High confidence + flags → UNVERIFIED
+  // Low confidence → UNCERTAIN
   let verdict: Verdict;
-  if (dpr.false_consensus && finalCalibratedConfidence >= verdictThreshold) {
+  if (materialityResult?.hasMaterialDefect) {
+    verdict = 'UNVERIFIED';
+  } else if (dpr.false_consensus && finalCalibratedConfidence >= verdictThreshold) {
     verdict = 'DISSENT';
+  } else if (hasDisagreement && !dpr.false_consensus) {
+    // v1.4: Generator disagreement → UNCERTAIN (generators split or all low-confidence)
+    // Do not override DISSENT — false consensus is a stronger signal.
+    verdict = 'UNCERTAIN';
   } else if (finalCalibratedConfidence >= verdictThreshold && flags.length === 0 && balance.score > 0.6) {
     verdict = 'VERIFIED';
   } else if (finalCalibratedConfidence >= verdictThreshold) {
