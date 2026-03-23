@@ -5,6 +5,11 @@
  * If confidence is low but synthesis is assertive, flag mismatch.
  *
  * Part of "The Mirror" — verification that verifies itself.
+ *
+ * v0.7 addition: Rasch-style per-model bias correction (calibrateByModel).
+ * β values empirically measured 2026-03-23 from raw_scores.json (60 API calls,
+ * no prompt hints). Verdict-aware: strict models get asymmetric treatment
+ * depending on whether they block (UNCERTAIN) or allow (ALLOW).
  */
 
 export interface CalibrationResult {
@@ -79,5 +84,78 @@ export function calibrateConfidence(confidence: number, synthesisText: string): 
     delta: 0,
     originalConfidence: confidence,
     calibratedConfidence: confidence,
+  };
+}
+
+// ─── Per-Model Rasch Calibration (v0.7) ──────────────────────────────────────
+
+/**
+ * β values: positive = model over-blocks (too strict), negative = over-allows.
+ * Empirically measured 2026-03-23 from raw_scores.json (no prompt hints).
+ *
+ *   deepseek: 3x false-positive strict-on-ALLOW → β=+0.40
+ *   grok:     2x false-positive strict-on-ALLOW → β=+0.20
+ *   gemini:   1/5 routine blocked (staking_eth HOLD), matches Grok → β=+0.20 (empirical)
+ *   sonnet:   reference model, best accuracy (60%), β=0.00 (no adjustment)
+ */
+const MODEL_BIAS: Record<string, number> = {
+  deepseek: +0.40,
+  grok:     +0.20,
+  gemini:   +0.20,  // empirical: 1/5 routine blocked (staking_eth HOLD), matches Grok
+  claude:   +0.00,  // reference
+  sonnet:   +0.00,  // alias for claude/sonnet family
+};
+
+const BIAS_SCALE  = 0.10;  // flat correction multiplier
+const BIAS_CAP    = 0.12;  // max flat correction (conservative)
+
+/**
+ * Verdict-aware Rasch-style bias correction.
+ *
+ * Asymmetric logic for strict models (β > 0):
+ *   UNCERTAIN → discount the block signal  (strict model hedging = weak evidence)
+ *   ALLOW     → amplify the allow signal   (strict model saying ALLOW = rare & strong)
+ *   others    → small flat correction capped at BIAS_CAP
+ *
+ * Sonnet/Claude (β=0) pass through unchanged — they are the calibration baseline.
+ * Verdicts are never flipped; only confidence is adjusted, bounded [0, 1].
+ *
+ * @param rawConfidence  Raw confidence from the model (0–1)
+ * @param modelName      Model identifier (partial match: "deepseek", "grok", etc.)
+ * @param verdict        Model's verdict: "ALLOW" | "HOLD" | "UNCERTAIN" | "DISSENT"
+ */
+export function calibrateByModel(
+  rawConfidence: number,
+  modelName: string,
+  verdict: string,
+): CalibrationResult {
+  const key = Object.keys(MODEL_BIAS).find((k) => modelName.toLowerCase().includes(k));
+  const beta = key !== undefined ? MODEL_BIAS[key] : 0.0;
+
+  let correction: number;
+  let reason: string;
+
+  if (beta > 0 && verdict.toUpperCase() === 'UNCERTAIN') {
+    correction = -(beta * 0.20);
+    reason = `${modelName} is strict (β=${beta}) and uncertain — discounting block signal`;
+  } else if (beta > 0 && verdict.toUpperCase() === 'ALLOW') {
+    correction = +(beta * 0.10);
+    reason = `${modelName} is strict (β=${beta}) but allows — rare signal, amplifying`;
+  } else {
+    correction = Math.min(BIAS_CAP, beta * BIAS_SCALE);
+    reason = beta === 0
+      ? `${modelName} is reference model — no adjustment`
+      : `${modelName} flat bias correction (β=${beta})`;
+  }
+
+  const calibrated = Math.min(1.0, Math.max(0.0, rawConfidence + correction));
+  const delta = calibrated - rawConfidence;
+
+  return {
+    adjusted: delta !== 0,
+    delta,
+    originalConfidence: rawConfidence,
+    calibratedConfidence: calibrated,
+    reason,
   };
 }

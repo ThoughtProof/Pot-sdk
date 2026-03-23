@@ -5,7 +5,7 @@ export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, O
 export { STAKE_THRESHOLDS } from './types.js';
 export { parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
 export type { MaterialityLevel, OverallAssessment, MaterialityObjection, MaterialityResult } from './pipeline/critic.js';
-export { calibrateConfidence } from './calibration.js';
+export { calibrateConfidence, calibrateByModel } from './calibration.js';
 export type { CalibrationResult } from './calibration.js';
 export { factCheckCritic } from './pipeline/factcheck.js';
 export type { FactCheckedObjection, FactCheckResult } from './pipeline/factcheck.js';
