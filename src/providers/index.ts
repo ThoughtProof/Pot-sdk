@@ -9,6 +9,8 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   'kimi': 'https://api.moonshot.ai/v1/chat/completions',
   'deepseek': 'https://api.deepseek.com/chat/completions',
   'openai': 'https://api.openai.com/v1/chat/completions',
+  'google': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+  'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 };
 
 const DEFAULT_MODELS: Record<string, string> = {
@@ -16,6 +18,8 @@ const DEFAULT_MODELS: Record<string, string> = {
   'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
   'moonshot': 'kimi-k2-turbo-preview',
+  'google': 'gemini-3.1-flash-lite-preview',
+  'gemini': 'gemini-3.1-flash-lite-preview',
 };
 
 export function detectBaseUrl(providerName: string, model: string): string {

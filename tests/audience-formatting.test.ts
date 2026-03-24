@@ -14,10 +14,16 @@ import type { VerificationResult, PipelineResult, Audience, ClassifiedObjection 
 
 function makeMinimalResult(overrides: Partial<VerificationResult> = {}): VerificationResult {
   return {
-    verified: true,
-    verdict: 'VERIFIED',
+    verdict: 'ALLOW',
     confidence: 0.85,
-    tier: 'pro',
+    severity_score: null,
+    mdi: 0.75,
+    objections: [],
+    domain: 'general',
+    stakeLevel: 'medium',
+    tier: 'standard',
+    durationMs: 1200,
+    verified: true,
     flags: [],
     timestamp: new Date().toISOString(),
     synthesis: 'The claim is well-supported by available evidence.',
@@ -53,12 +59,12 @@ describe('audience: pipeline — PipelineResult shape', () => {
     const pr = buildPipelineResult(result);
     expect(pr.pass).toBe(true);
     expect(pr.confidence).toBe(0.85);
-    expect(pr.verdict).toBe('VERIFIED');
+    expect(pr.verdict).toBe('ALLOW');
     expect(pr.audience).toBe('pipeline');
   });
 
   it('produces pass: false when confidence <= 0.70', () => {
-    const result = makeMinimalResult({ confidence: 0.60, verdict: 'UNCERTAIN' });
+    const result = makeMinimalResult({ confidence: 0.60, verdict: 'UNCERTAIN', severity_score: null });
     const pr = buildPipelineResult(result);
     expect(pr.pass).toBe(false);
   });
@@ -126,11 +132,48 @@ describe('PipelineResult type contract', () => {
       pass: true,
       confidence: 0.9,
       flags: ['cousin-bias-risk'],
-      verdict: 'VERIFIED',
+      verdict: 'ALLOW',
       audience: 'pipeline',
       topObjection: { type: 'logical', severity: 'minor', claim: 'Minor leap in step 3' },
     };
     expect(pr.pass).toBe(true);
     expect(pr.topObjection?.severity).toBe('minor');
+  });
+});
+
+describe('v2.0 verdict values', () => {
+  it('BLOCK verdict has severity_score', () => {
+    const result = makeMinimalResult({
+      verdict: 'BLOCK',
+      severity_score: 0.72,
+      verified: false,
+    });
+    expect(result.verdict).toBe('BLOCK');
+    expect(result.severity_score).toBe(0.72);
+  });
+
+  it('ALLOW verdict has null severity_score', () => {
+    const result = makeMinimalResult({ verdict: 'ALLOW', severity_score: null });
+    expect(result.severity_score).toBeNull();
+  });
+
+  it('UNCERTAIN verdict has null severity_score', () => {
+    const result = makeMinimalResult({ verdict: 'UNCERTAIN', severity_score: null });
+    expect(result.severity_score).toBeNull();
+  });
+
+  it('tier is lite or standard', () => {
+    const lite = makeMinimalResult({ tier: 'lite', mdi: null });
+    const standard = makeMinimalResult({ tier: 'standard', mdi: 0.67 });
+    expect(lite.tier).toBe('lite');
+    expect(lite.mdi).toBeNull();
+    expect(standard.tier).toBe('standard');
+    expect(standard.mdi).toBe(0.67);
+  });
+
+  it('objections is always an array', () => {
+    const result = makeMinimalResult({ objections: ['Risk too high', 'No stop-loss'] });
+    expect(Array.isArray(result.objections)).toBe(true);
+    expect(result.objections).toHaveLength(2);
   });
 });

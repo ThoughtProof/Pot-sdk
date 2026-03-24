@@ -83,7 +83,7 @@ export interface ERC8004Evidence {
   result: {
     verdict: string;
     confidence: number;
-    mdi?: number;
+    mdi?: number | null;
     sas?: number;
     dpr?: {
       score: number;

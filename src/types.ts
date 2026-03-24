@@ -1,7 +1,39 @@
-// ── A2A Verification Credential Types (v0.3) ──────────────────────────────
+// ── A2A Verification Credential Types (v2.0) ──────────────────────────────
 
-export type Verdict = 'VERIFIED' | 'UNVERIFIED' | 'UNCERTAIN' | 'DISSENT';
+/**
+ * v2.0: Public three-tier verdict for agent integration.
+ *   - ALLOW:     Sound reasoning, appropriate risk management. Proceed.
+ *   - BLOCK:     Significant flaws, disproportionate risk, dangerous reasoning. Stop or escalate.
+ *   - UNCERTAIN: Insufficient verification confidence under risk-aware policy. Human review.
+ *
+ * Internal four-tier (ALLOW/HOLD/DISSENT/UNCERTAIN) is retained for training/calibration
+ * but never surfaces in public exports or API responses.
+ */
+export type Verdict = 'ALLOW' | 'BLOCK' | 'UNCERTAIN';
 
+/**
+ * Internal four-tier verdict retained for calibration, training data, and analysis.
+ * Maps to public Verdict at the API response layer only.
+ *
+ * | Internal  | External Mapping |
+ * |-----------|-----------------|
+ * | ALLOW     | → ALLOW         |
+ * | HOLD      | → BLOCK (severity_score ~0.30–0.60) |
+ * | DISSENT   | → BLOCK (severity_score ~0.70–1.00) |
+ * | UNCERTAIN | → UNCERTAIN     |
+ *
+ * Not exported from index.ts.
+ */
+export type InternalVerdict = 'ALLOW' | 'HOLD' | 'DISSENT' | 'UNCERTAIN';
+
+/**
+ * v2.0: Externally exposed pipeline tier.
+ *   - lite:     2-model fast gate (DeepSeek + Grok). Low/medium stake only. No synthesizer.
+ *   - standard: Full 3-model pipeline with synthesizer. Any stake level.
+ */
+export type PublicTier = 'lite' | 'standard';
+
+/** Internal pipeline mode (kept for backward compat and internal dispatch). */
 export type VerificationMode = 'basic' | 'standard' | 'deep';
 
 /**
@@ -38,12 +70,12 @@ export interface ClassifiedObjection {
 export type DomainProfile = 'medical' | 'legal' | 'financial' | 'creative' | 'code' | 'general' | 'agentic';
 
 /**
- * v1.2: Stake levels — proportional skepticism.
- * Controls confidence threshold and critic depth.
- * Credit: ThoughtProof Prior Auth + Commerce PoC (2026-03-14)
- *   "Blocking weak decisions is easier than proving strong ones."
+ * v2.0: Stake levels — proportional skepticism.
+ * Controls confidence threshold, tier eligibility, and critic depth.
+ *
+ * 'micro' removed from public API in v2.0.
  */
-export type StakeLevel = 'micro' | 'low' | 'medium' | 'high' | 'critical';
+export type StakeLevel = 'low' | 'medium' | 'high' | 'critical';
 
 /**
  * v1.2: Trust boundaries — separates trusted context from claims to verify.
@@ -58,9 +90,8 @@ export interface TrustContext {
   toVerify?: string;
 }
 
-/** v1.2: Stake level default thresholds */
+/** v2.0: Stake level confidence thresholds */
 export const STAKE_THRESHOLDS: Record<StakeLevel, number> = {
-  micro: 0.40,
   low: 0.50,
   medium: 0.60,
   high: 0.75,
@@ -146,7 +177,7 @@ export interface TPVerificationCredential {
     consensus_threshold: number;
     consensus_reached: boolean;
     metrics: {
-      mdi: number;
+      mdi: number | null;
       sas: number;
       dpr: DPRResult;
     };
@@ -218,7 +249,8 @@ export interface ProviderConfig {
 }
 
 export interface VerifyOptions {
-  tier: 'basic' | 'pro';
+  /** @deprecated Use 'lite' | 'standard'. Legacy 'basic'→'lite', 'pro'→'standard'. */
+  tier: 'lite' | 'standard' | 'basic' | 'pro';
   generators: GeneratorConfig[];
   critic: GeneratorConfig;
   synthesizer: GeneratorConfig;
@@ -227,25 +259,53 @@ export interface VerifyOptions {
 }
 
 export interface VerificationResult {
-  /** @deprecated Use `verdict` instead. Kept for backward compatibility. */
-  verified: boolean;
-  /** v0.3+: Structured verdict enum */
+  // ── v2.0 Public API Fields (always present) ────────────────────────────
+  /** v2.0: Public verdict: ALLOW, BLOCK, or UNCERTAIN. */
   verdict: Verdict;
+  /** How certain the system is in the final verdict (0.0–1.0). */
   confidence: number;
-  /** @deprecated Use `pipeline.mode` instead. */
-  tier: 'basic' | 'pro';
+  /**
+   * v2.0: How dangerous the blocked case is (0.0–1.0).
+   * Always present in JSON. null when verdict ∈ {ALLOW, UNCERTAIN}.
+   */
+  severity_score: number | null;
+  /**
+   * v2.0: Model Diversity Index. Always present.
+   * null for Lite tier (2-model gate lacks sufficient diversity signal).
+   * float 0.0–1.0 for Standard tier.
+   */
+  mdi: number | null;
+  /**
+   * v2.0: Concise, machine-displayable objection reasons.
+   * Always present, never null. Empty array when no objections.
+   * For BLOCK: top 3 material concerns. For ALLOW: may be empty or caveats.
+   */
+  objections: string[];
+  /** v2.0: Detected or caller-provided domain. Always present. */
+  domain: string;
+  /** v2.0: Detected or caller-provided stake level. Always present. */
+  stakeLevel: string;
+  /**
+   * v2.0: Actually executed tier (may differ from requested).
+   * Billing follows executed tier. 'lite' | 'standard'.
+   */
+  tier: 'lite' | 'standard';
+  /** v2.0: Wall-clock verification time in milliseconds. Always present. */
+  durationMs: number;
+
+  // ── Legacy / Extended Fields ───────────────────────────────────────────
+  /** @deprecated Use `verdict === 'ALLOW'` instead. Kept for backward compatibility. */
+  verified: boolean;
   flags: string[];
   timestamp: string;
   /** Present when verify() was called with sandbox:true and pot-sandbox is installed */
   sandbox?: import('./sandbox.js').SandboxCheckResult;
-  mdi?: number;
   sas?: number;
   dpr?: DPRResult;
   biasMap?: Record<string, number>;
   dissent?: any;
   synthesis?: string;
   classifiedObjections?: ClassifiedObjection[];
-  domain?: DomainProfile;
   outputFormat?: OutputFormat;
   /** v0.6+: Fact-checked objections when multiRound is enabled */
   factCheckedObjections?: import('./pipeline/factcheck.js').FactCheckedObjection[];

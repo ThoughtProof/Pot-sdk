@@ -1,4 +1,10 @@
-# pot-sdk v0.1 — Specification
+# pot-sdk v2.0.0 — Specification
+
+> **v2.0 breaking changes:** Verdict enum is now `ALLOW | BLOCK | UNCERTAIN`. Tier is `lite | standard`. `StakeLevel` removed `micro`. New required response fields: `severity_score`, `mdi`, `objections`, `domain`, `stakeLevel`, `durationMs`. See `KB/SPEC-v2.0-production-design.md` for the full design spec.
+
+---
+
+# pot-sdk v0.1 — Legacy Specification (archived)
 
 ## Overview
 

@@ -1,4 +1,10 @@
-import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
+import type {
+  VerificationResult, Proposal, Synthesis, VerificationFlag,
+  GeneratorConfig, ProviderConfig, Verdict, InternalVerdict,
+  VerificationMode, CriticMode, DomainProfile, OutputFormat,
+  ReceptiveMode, ClassifiedObjection, FailureCost, Audience,
+  PipelineResult, StakeLevel,
+} from './types.js';
 import { DOMAIN_PROFILES, DOMAIN_REFERENCE_CONTEXT, checkToxicCombination, resolveDomain, detectDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
 import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
@@ -24,6 +30,77 @@ import type { DiversifiedInput } from './pipeline/diversifier.js';
 import { decomposeClaim } from './pipeline/decomposer.js';
 import { compositionalSynthesize } from './pipeline/compositor.js';
 import type { SubVerdict } from './pipeline/compositor.js';
+import { detectStake } from './stake.js';
+
+// ── Map internal 4-tier → public 3-tier ───────────────────────────────────────
+
+function mapVerdict(internal: InternalVerdict): Verdict {
+  if (internal === 'ALLOW') return 'ALLOW';
+  if (internal === 'UNCERTAIN') return 'UNCERTAIN';
+  return 'BLOCK'; // HOLD or DISSENT
+}
+
+/**
+ * Compute severity_score for BLOCK verdicts.
+ *   DISSENT (material defect / false consensus) → high severity: ~0.70–1.00
+ *   HOLD (moderate concerns, high conf + flags) → moderate severity: ~0.30–0.65
+ * Returns null for ALLOW / UNCERTAIN.
+ */
+function computeSeverityScore(internal: InternalVerdict, confidence: number): number | null {
+  if (internal === 'DISSENT') {
+    return parseFloat(Math.min(1.0, 0.70 + confidence * 0.30).toFixed(3));
+  }
+  if (internal === 'HOLD') {
+    return parseFloat(Math.min(0.65, Math.max(0.30, 0.30 + confidence * 0.35)).toFixed(3));
+  }
+  return null;
+}
+
+// ── Extract public objections from pipeline output ─────────────────────────────
+
+function extractPublicObjections(
+  classifiedObjections: ClassifiedObjection[] | undefined,
+  critiqueContent: string,
+  limit = 3,
+): string[] {
+  // Prefer structured classified objections (already ranked by severity)
+  if (classifiedObjections && classifiedObjections.length > 0) {
+    return classifiedObjections.slice(0, limit).map((o) => o.claim);
+  }
+
+  // Fall back to parsing objection lines from critique text
+  const lines = critiqueContent.split('\n').map((l) => l.trim()).filter(Boolean);
+  const objections: string[] = [];
+
+  for (const line of lines) {
+    if (objections.length >= limit) break;
+    // Match: bullet points, numbered items, or OBJECTION: prefix
+    const isBullet = /^[-•*]\s+/.test(line);
+    const isNumbered = /^\d+[.)]\s+/.test(line);
+    const isObjection = /^objection:/i.test(line);
+    if (isBullet || isNumbered || isObjection) {
+      const text = line
+        .replace(/^[-•*\d.)\s]+/, '')
+        .replace(/^objection:\s*/i, '')
+        .replace(/\[.*?\]\s*/g, '') // strip [TYPE:...] tags
+        .trim();
+      if (text.length > 10) objections.push(text);
+    }
+  }
+
+  return objections;
+}
+
+// ── Parse lite-tier generator vote ───────────────────────────────────────────
+
+function parseLiteVote(content: string): 'ALLOW' | 'BLOCK' {
+  const lower = content.toLowerCase();
+  const allowScore = (lower.match(/\b(allow|safe|sound|proceed|recommend|verified|approved|valid)\b/g) ?? []).length;
+  const blockScore = (lower.match(/\b(block|hold|stop|deny|unverified|risky|danger|unsafe|reject|dissent|concern|flaw|error|incorrect|insufficient)\b/g) ?? []).length;
+  return allowScore > blockScore ? 'ALLOW' : 'BLOCK';
+}
+
+// ── Dual synthesizer ──────────────────────────────────────────────────────────
 
 async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
@@ -43,7 +120,6 @@ async function runDualSynthesizer(
   ];
 
   const results = await Promise.allSettled(synthCalls);
-
   const fulfilled = results.filter((result) => result.status === 'fulfilled') as { value: Synthesis }[];
 
   if (fulfilled.length === 0) {
@@ -51,7 +127,6 @@ async function runDualSynthesizer(
   }
 
   const primary = fulfilled[0].value;
-
   const verification = {
     similarity_score: 0,
     diverged: true,
@@ -68,22 +143,26 @@ async function runDualSynthesizer(
     verification.diverged = verification.similarity_score < SIMILARITY_DIVERGENCE_THRESHOLD;
   }
 
-  return {
-    primary,
-    verification,
-  };
+  return { primary, verification };
 }
 
+// ── VerifyParams ──────────────────────────────────────────────────────────────
+
 interface VerifyParams {
-  /** @deprecated Use `mode` instead. Kept for backward compat. */
-  tier?: 'basic' | 'pro';
   /**
-   * v0.3+: Verification mode.
-   *   - basic: 1 generator + 1 critic, <30s
-   *   - standard: 3+ generators + 1 critic, 1 round, 1-3 min
-   *   - deep: 3+ generators + 1 critic, 2 rounds, 5-15 min
-   * Takes precedence over `tier`. If omitted, falls back to `tier`.
+   * v2.0: Pipeline tier.
+   *   - 'lite':     2-model fast gate. Low/medium stake only. ~$0.003, 5–10s.
+   *   - 'standard': Full 3-model pipeline with synthesizer. Any stake. ~$0.008, 10–20s.
+   *
+   * @deprecated 'basic' maps to 'lite', 'pro' maps to 'standard' for backward compat.
    */
+  tier?: 'lite' | 'standard' | 'basic' | 'pro';
+  /**
+   * v2.0: Skip escalation on lite split. Returns UNCERTAIN instead of upgrading to standard.
+   * Ignored for high/critical stake (always standard, no opt-out).
+   */
+  no_escalation?: boolean;
+  /** @deprecated Use `tier: 'standard'` instead. Internal pipeline dispatch only. */
   mode?: VerificationMode;
   /**
    * v0.2+: Full provider list. SDK assigns roles automatically.
@@ -183,11 +262,10 @@ interface VerifyParams {
    */
   context?: import('./types.js').TrustContext;
   /**
-   * v1.2+: Stake level for proportional skepticism.
-   * Controls the confidence threshold needed for ALLOW.
-   * If omitted, falls back to domain profile default or failureCost mapping.
+   * v2.0+: Stake level — controls confidence threshold, tier eligibility, and critic depth.
+   * If omitted, auto-detected via detectStake() (multi-signal).
    */
-  stakeLevel?: import('./types.js').StakeLevel;
+  stakeLevel?: StakeLevel;
   /**
    * v1.3+: Recursive claim decomposition.
    * When true, the claim is first analyzed for compound structure.
@@ -214,10 +292,8 @@ interface VerifyParams {
   _recursionDepth?: number;
 }
 
-/**
- * v0.6: failureCost → verdict threshold mapping.
- * Credit: @evil_robot_jas — "a liability dressed up as a safety feature"
- */
+// ── Failure cost thresholds ──────────────────────────────────────────────────
+
 const FAILURE_COST_THRESHOLDS: Record<FailureCost, number> = {
   negligible: 0.50,
   low: 0.60,
@@ -226,10 +302,8 @@ const FAILURE_COST_THRESHOLDS: Record<FailureCost, number> = {
   critical: 0.90,
 };
 
-/**
- * v0.6: Detect cousin bias — providers sharing training lineage.
- * Credit: @evil_robot_jas — "polite argument between cousins"
- */
+// ── Cousin bias detection ────────────────────────────────────────────────────
+
 function detectCousinBias(
   generatorModels: string[],
   criticModel: string,
@@ -259,6 +333,8 @@ function detectCousinBias(
   return { detected: false, reason: '', sharedProviders: [] };
 }
 
+// ── Provider setup ────────────────────────────────────────────────────────────
+
 const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'moonshot'] as const;
 const DEFAULT_MODELS: Record<string, string> = {
   'anthropic': 'claude-sonnet-4-6',
@@ -267,13 +343,23 @@ const DEFAULT_MODELS: Record<string, string> = {
   'moonshot': 'kimi-k2-turbo-preview',
 };
 
+// ── Main verify() ─────────────────────────────────────────────────────────────
+
 export async function verify(output: string, params: VerifyParams): Promise<VerificationResult> {
   const startTime = Date.now();
 
-  // v0.3: mode takes precedence over tier
-  const mode: VerificationMode = params.mode || (params.tier === 'pro' ? 'standard' : params.tier as VerificationMode) || 'basic';
-  // Map mode back to legacy tier for backward compat
-  const tier = mode === 'basic' ? 'basic' : 'pro';
+  // ── Tier resolution ────────────────────────────────────────────────────────
+  // v2.0: 'lite' | 'standard'. Backward compat: 'basic' → 'lite', 'pro' → 'standard'.
+  const rawTier = params.tier;
+  const requestedTier: 'lite' | 'standard' =
+    rawTier === 'lite' ? 'lite' :
+    rawTier === 'basic' ? 'lite' :
+    'standard'; // default to standard; 'pro' and undefined → standard
+
+  // Internal mode (kept for pipeline dispatch)
+  const mode: VerificationMode = params.mode ||
+    (requestedTier === 'lite' ? 'basic' : 'standard');
+
   const lang = params.language || 'en';
 
   // v0.3: claim alias for question
@@ -282,10 +368,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     throw new Error('Either `claim` or `question` must be provided');
   }
 
-  // v1.4: Domain auto-detection + reference context injection
-  // Computed early so claimWithContext is available for generators.
-  // effectiveDomain is re-resolved later (after lockfile check); this is the pre-lockfile value
-  // used only for reference context — lockfile cannot downgrade domain, so context is safe.
+  // ── Domain detection ───────────────────────────────────────────────────────
+  // Computed early for reference context and stake detection.
   const _earlyDomain = detectDomain(question);
   const _earlyRefCtx = DOMAIN_REFERENCE_CONTEXT[params.domain ?? _earlyDomain];
   const claimWithContext: string = _earlyRefCtx
@@ -298,18 +382,32 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     throw new Error(`Input exceeds ${mode} mode limit (${maxLen} chars)`);
   }
 
-  // Static adversarial scan — runs BEFORE AI pipeline
-  // Injection patterns can bypass semantic analysis, so we check here first.
+  // ── Effective domain (after lockfile ratchet) ─────────────────────────────
+  const autoDetectedDomain = !params.domain ? detectDomain(question) : undefined;
+  const effectiveDomain = resolveDomain(params.domain ?? autoDetectedDomain ?? 'general', params.domainLockfile);
+
+  // ── Stake detection ────────────────────────────────────────────────────────
+  // v2.0: Multi-signal auto-detection with caller override as absolute precedence.
+  const effectiveStakeLevel: StakeLevel = detectStake(
+    question,
+    params.stakeLevel,
+    effectiveDomain,
+  );
+
+  // ── Tier override: high/critical always execute standard ───────────────────
+  // No opt-out. no_escalation has no effect for high/critical.
+  const executedTier: 'lite' | 'standard' =
+    requestedTier === 'lite' && (effectiveStakeLevel === 'high' || effectiveStakeLevel === 'critical')
+      ? 'standard'
+      : requestedTier;
+
+  // ── Adversarial scan ───────────────────────────────────────────────────────
   const adversarialScan = scanForAdversarialPatterns(output);
 
-  // v0.6.3: LLM-based injection guard (Anthropic Sectioning pattern)
-  // Runs as SEPARATE model call before verification — not the verifier itself.
-  // "One model screens for inappropriate content while another processes queries.
-  //  This tends to perform better." — Anthropic, Building Effective Agents
+  // ── LLM Guard ─────────────────────────────────────────────────────────────
   let guardResult: GuardResult | undefined;
   if (params.guard !== false && Array.isArray(params.providers) && params.providers.length > 0) {
     try {
-      // Use the first/cheapest provider for guard duty
       const guardConfig = params.providers[0];
       const guardProvider = createProviderFromConfig(guardConfig);
       guardResult = await runGuard(guardProvider, guardConfig.model, output + '\n\n' + question);
@@ -317,26 +415,19 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
         console.warn(`[pot-sdk] ⚠️ Injection detected by guard (${guardResult.model}): ${guardResult.evidence}`);
       }
     } catch (err) {
-      // Guard failure = don't block, continue with verification
       console.warn('[pot-sdk] Guard check failed, continuing:', err instanceof Error ? err.message : err);
     }
   }
 
-  // v1.1: Out-of-band feature extraction (STIR/SHAKEN pattern)
-  // Extract structured claims from raw content BEFORE it enters the pipeline.
-  // Verifiers see features, not raw text. Credit: voipbin-cco (Moltbook)
+  // ── Feature extraction ─────────────────────────────────────────────────────
   let extractionResult: ExtractionResult | undefined;
   let sanitizedOutput = output;
 
   if (params.extractFeatures === true && Array.isArray(params.providers) && params.providers.length > 0) {
     try {
-      // Use a DIFFERENT provider than the guard to avoid common-mode failure.
-      // Guard uses providers[0], extractor uses providers[1] (or [0] if only one available).
-      // Credit: Steel Man review — "Guard + Extractor = same provider = common-mode failure"
       const providerList = params.providers as ProviderConfig[];
       const extractorConfig = providerList.length > 1 ? providerList[1] : providerList[0];
       const extractorProvider = createProviderFromConfig(extractorConfig);
-      // Pass adversarial scanner for post-extraction validation
       const scanFn = (text: string) => {
         const scan = scanForAdversarialPatterns(text);
         return { detected: scan.detected, patterns: scan.patterns };
@@ -345,14 +436,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       if (extractionResult.claimCount > 0) {
         sanitizedOutput = extractionResult.sanitizedContent;
       }
-      // If extraction found 0 claims but LLM succeeded, the content may be pure noise/injection
       if (extractionResult.llmExtracted && extractionResult.claimCount === 0) {
         console.warn('[pot-sdk] ⚠️ Feature extractor found 0 claims — content may be empty or injection-only');
       }
     } catch (err) {
-      // Extraction failure = fall back to raw output (don't block pipeline)
       console.warn('[pot-sdk] Feature extraction failed, using raw output:', err instanceof Error ? err.message : err);
-      // Static fallback
       const staticFeatures = extractFeaturesStatic(output);
       if (staticFeatures.length > 0) {
         sanitizedOutput = reconstructFromFeatures(staticFeatures);
@@ -370,89 +458,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     }
   }
 
-  // ── v1.3: Recursive claim decomposition ──────────────────────────────────
-  // Runs AFTER guard + extraction but BEFORE generators.
-  // If the claim is compound and minComplexity sub-claims are found, each sub-claim
-  // is verified independently and results are merged via compositional synthesis.
-  // Credit: RECURSIVE-VERIFY-SPEC.md, arxiv:2512.24601
-  if (
-    params.recursive === true &&
-    Array.isArray(params.providers) &&
-    params.providers.length > 0 &&
-    (params._recursionDepth === undefined || params._recursionDepth < (params.maxDepth ?? 2))
-  ) {
-    const providerList = params.providers as import('./types.js').ProviderConfig[];
-    const minComplexity = params.minComplexity ?? 3;
-
-    const decomposition = await decomposeClaim(question, providerList);
-
-    if (decomposition.isCompound && decomposition.subClaims.length >= minComplexity) {
-      const subVerdicts: SubVerdict[] = [];
-
-      for (const subClaim of decomposition.subClaims) {
-        // Inherit stakeLevel from parent, but allow sub-claim to override if specified
-        const subStakeLevel = (subClaim.stakeLevel as import('./types.js').StakeLevel | undefined) ?? params.stakeLevel;
-
-        const subResult = await verify(output, {
-          ...params,
-          claim: subClaim.claim,
-          // Disable recursion for sub-verifications (guard against compound-in-compound)
-          recursive: false,
-          _recursionDepth: (params._recursionDepth ?? 0) + 1,
-          ...(subStakeLevel ? { stakeLevel: subStakeLevel } : {}),
-        });
-
-        subVerdicts.push({
-          claim: subClaim.claim,
-          verdict: subResult.verdict,
-          confidence: subResult.confidence,
-          synthesis: subResult.synthesis,
-          flags: subResult.flags,
-        });
-      }
-
-      const compResult = await compositionalSynthesize(
-        question,
-        subVerdicts,
-        decomposition.dependencies,
-        providerList,
-      );
-
-      // Build a VerificationResult from the compositional outcome
-      const compDurationMs = Date.now() - startTime;
-      const compVerified = compResult.verdict === 'VERIFIED';
-
-      const compVerificationResult: VerificationResult = {
-        verified: compVerified,
-        verdict: compResult.verdict,
-        confidence: compResult.confidence,
-        tier: tier,
-        flags: subVerdicts.flatMap(sv => (sv.flags ?? []).map(f => `subclaim:${f}`)),
-        timestamp: new Date().toISOString(),
-        synthesis: compResult.synthesis,
-        subVerdicts,
-        compositionRisk: compResult.compositionRisk,
-        pipeline: {
-          mode,
-          generators: [],
-          critic: 'compositional',
-          synthesizer: 'compositional',
-          rounds: 1,
-          duration_ms: compDurationMs,
-        },
-      };
-
-      return compVerificationResult;
-    }
-    // If not compound or not enough sub-claims → fall through to normal pipeline
-  }
-
-  // WASM sandbox check — runs in parallel with pipeline (opt-in via params.sandbox)
-  const sandboxPromise = params.sandbox
-    ? runSandboxCheck(output)  // Note: sandbox still checks raw output (it's code analysis, not semantic)
-    : Promise.resolve(null);
-
-  // ── v0.2: ProviderConfig[] path ──────────────────────────────────────────
+  // ── Provider setup ─────────────────────────────────────────────────────────
   const isV2Providers = Array.isArray(params.providers);
 
   let gensProviders: { provider: ReturnType<typeof createProvider>; model: string }[];
@@ -478,7 +484,6 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthModel = synthesizer.model;
 
   } else {
-    // ── v0.1 legacy: string-based provider names + apiKeys dict ─────────────
     const apiKeys = params.apiKeys ?? {};
     const legacyProviders = params.providers as { generators?: string[]; critic?: string; synthesizer?: string } | undefined;
     const genNames = legacyProviders?.generators || DEFAULT_GEN_NAMES.slice(0, mode !== 'basic' ? 4 : 1);
@@ -517,41 +522,221 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     synthModel = synthConfig.model;
   }
 
-  // ── Track model names for pipeline info ───────────────────────────────────
   const generatorModelNames = gensProviders.map(g => g.model);
 
-  // ── Run pipeline ─────────────────────────────────────────────────────────
-  // v1.1: Diversify inputs if enabled — each generator gets a different representation
-  // Fix 6 (Steel Man): When BOTH extractFeatures and diversifyInputs are active,
-  // diversify the SANITIZED output, not the raw claim. This is true defense-in-depth:
-  // Layer 1 removes injections → Layer 3 diversifies the clean features.
-  let diversifiedInputsForGenerators: DiversifiedInput[] | undefined;
-  if (params.diversifyInputs === true && gensProviders.length > 1) {
-    // If extraction produced a sanitized version, diversify that instead of raw question
-    const inputToDiversify = (params.extractFeatures === true && extractionResult?.claimCount && extractionResult.claimCount > 0)
-      ? extractionResult.sanitizedContent
-      : question;
-    diversifiedInputsForGenerators = diversifyInput(inputToDiversify, gensProviders.length, lang);
+  // ── Recursive decomposition ────────────────────────────────────────────────
+  if (
+    params.recursive === true &&
+    Array.isArray(params.providers) &&
+    params.providers.length > 0 &&
+    (params._recursionDepth === undefined || params._recursionDepth < (params.maxDepth ?? 2))
+  ) {
+    const providerList = params.providers as import('./types.js').ProviderConfig[];
+    const minComplexity = params.minComplexity ?? 3;
+
+    const decomposition = await decomposeClaim(question, providerList);
+
+    if (decomposition.isCompound && decomposition.subClaims.length >= minComplexity) {
+      const subVerdicts: SubVerdict[] = [];
+
+      for (const subClaim of decomposition.subClaims) {
+        const subStakeLevel = (subClaim.stakeLevel as StakeLevel | undefined) ?? params.stakeLevel;
+
+        const subResult = await verify(output, {
+          ...params,
+          claim: subClaim.claim,
+          recursive: false,
+          _recursionDepth: (params._recursionDepth ?? 0) + 1,
+          ...(subStakeLevel ? { stakeLevel: subStakeLevel } : {}),
+        });
+
+        subVerdicts.push({
+          claim: subClaim.claim,
+          verdict: subResult.verdict,
+          confidence: subResult.confidence,
+          synthesis: subResult.synthesis,
+          flags: subResult.flags,
+        });
+      }
+
+      const compResult = await compositionalSynthesize(
+        question,
+        subVerdicts,
+        decomposition.dependencies,
+        providerList,
+      );
+
+      const compDurationMs = Date.now() - startTime;
+      const compPublicVerdict: Verdict = compResult.verdict;
+      const compInternalVerdict: InternalVerdict =
+        compResult.verdict === 'ALLOW' ? 'ALLOW' :
+        compResult.verdict === 'UNCERTAIN' ? 'UNCERTAIN' :
+        'HOLD'; // compositional BLOCK is treated as HOLD severity
+
+      return {
+        verdict: compPublicVerdict,
+        confidence: compResult.confidence,
+        severity_score: computeSeverityScore(compInternalVerdict, compResult.confidence),
+        mdi: null, // compositional path does not compute MDI
+        objections: [],
+        domain: effectiveDomain,
+        stakeLevel: effectiveStakeLevel,
+        tier: executedTier,
+        durationMs: compDurationMs,
+        verified: compPublicVerdict === 'ALLOW',
+        flags: subVerdicts.flatMap(sv => (sv.flags ?? []).map(f => `subclaim:${f}`)),
+        timestamp: new Date().toISOString(),
+        synthesis: compResult.synthesis,
+        subVerdicts,
+        compositionRisk: compResult.compositionRisk,
+        pipeline: {
+          mode,
+          generators: [],
+          critic: 'compositional',
+          synthesizer: 'compositional',
+          rounds: 1,
+          duration_ms: compDurationMs,
+        },
+      };
+    }
   }
 
-  let proposals: Proposal[] = await runGenerators(gensProviders, claimWithContext, lang, false, undefined, diversifiedInputsForGenerators);
-  if (output) {
-    // v1.1: Use sanitized (feature-extracted) output instead of raw content.
-    // Raw content may contain injections; sanitized content is structured claims only.
-    // Credit: voipbin-cco — "out-of-band verification"
-    proposals.push({ model: 'user-output', content: sanitizedOutput });
+  // ── LITE TIER PATH ─────────────────────────────────────────────────────────
+  // 2-model fast gate: DeepSeek + Grok. No synthesizer. No MDI.
+  // Split → escalate to standard (default) or UNCERTAIN (no_escalation:true).
+  if (executedTier === 'lite') {
+    // Use first 2 generators for lite gate
+    const liteGens = gensProviders.slice(0, 2);
+    if (liteGens.length < 2) {
+      // Insufficient providers for lite — fall through to standard
+      // (handled below; executedTier effectively becomes standard)
+    } else {
+      let diversifiedInputsLite: DiversifiedInput[] | undefined;
+      if (params.diversifyInputs === true && liteGens.length > 1) {
+        diversifiedInputsLite = diversifyInput(
+          params.extractFeatures === true && extractionResult?.claimCount && extractionResult.claimCount > 0
+            ? extractionResult.sanitizedContent
+            : question,
+          liteGens.length,
+          lang,
+        );
+      }
+
+      const liteProposals = await runGenerators(
+        liteGens, claimWithContext, lang, false, undefined, diversifiedInputsLite,
+      );
+
+      // Gate: parse each generator's vote
+      const votes = liteProposals.map(p => parseLiteVote(p.content));
+      const allAllow = votes.every(v => v === 'ALLOW');
+      const allBlock = votes.every(v => v === 'BLOCK');
+      const isSplit = !allAllow && !allBlock;
+
+      if (isSplit && !params.no_escalation) {
+        // Split + escalation allowed → fall through to standard pipeline below.
+        // executedTier stays 'lite' in label but we run standard. We'll track this
+        // separately and set tier = 'standard' in the response (reflects executed tier).
+        //
+        // We do NOT return here — fall through to standard path.
+        // Mark as escalated for response header (X-ThoughtProof-Tier-Overridden).
+      } else {
+        // Determinate lite result: both agree, or split + no_escalation
+        const liteConfidence = liteProposals.reduce((sum, p) => sum + parseConfidence(p.content), 0) / liteProposals.length;
+        const liteCapGuard = adversarialScan.detected ? adversarialScan.confidence_cap : 1.0;
+        const liteCapGuardResult = guardResult?.injected ? 0.25 : 1.0;
+        const liteConf = Math.min(liteConfidence, liteCapGuard, liteCapGuardResult);
+
+        let liteInternalVerdict: InternalVerdict;
+        let litePublicVerdict: Verdict;
+        let liteObjsSource = '';
+
+        if (allAllow) {
+          liteInternalVerdict = 'ALLOW';
+          litePublicVerdict = 'ALLOW';
+        } else if (allBlock) {
+          liteInternalVerdict = 'HOLD'; // lite BLOCK = HOLD severity (no synthesizer to confirm DISSENT)
+          litePublicVerdict = 'BLOCK';
+          liteObjsSource = liteProposals[0].content;
+        } else {
+          // isSplit + no_escalation:true → UNCERTAIN
+          liteInternalVerdict = 'UNCERTAIN';
+          litePublicVerdict = 'UNCERTAIN';
+          liteObjsSource = liteProposals[0].content;
+        }
+
+        const liteObjections = liteObjsSource
+          ? extractPublicObjections(undefined, liteObjsSource)
+          : [];
+
+        const liteFlags: VerificationFlag[] = [];
+        if (adversarialScan.detected) {
+          liteFlags.push('adversarial-pattern');
+          for (const p of adversarialScan.patterns) {
+            liteFlags.push(`adversarial:${p}`);
+          }
+        }
+        if (guardResult?.injected) {
+          liteFlags.push('injection-detected');
+          liteFlags.push(`guard:${guardResult.model}`);
+        }
+        if (isSplit) liteFlags.push('lite-split');
+        if (extractionResult?.llmExtracted && extractionResult.claimCount === 0) {
+          liteFlags.push('empty-extraction');
+        }
+
+        const liteDurationMs = Date.now() - startTime;
+
+        const liteResult: VerificationResult = {
+          verdict: litePublicVerdict,
+          confidence: parseFloat(liteConf.toFixed(3)),
+          severity_score: computeSeverityScore(liteInternalVerdict, liteConf),
+          mdi: null, // lite: always null
+          objections: liteObjections,
+          domain: effectiveDomain,
+          stakeLevel: effectiveStakeLevel,
+          tier: 'lite',
+          durationMs: liteDurationMs,
+          verified: litePublicVerdict === 'ALLOW',
+          flags: liteFlags,
+          timestamp: new Date().toISOString(),
+          ...(guardResult ? { guard: guardResult } : {}),
+          ...(extractionResult ? {
+            extraction: {
+              model: extractionResult.model,
+              claimCount: extractionResult.claimCount,
+              llmExtracted: extractionResult.llmExtracted,
+              latencyMs: extractionResult.latencyMs,
+              rejectedClaims: extractionResult.rejectedClaims,
+              ...(extractionResult.rejectionReasons.length > 0 ? { rejectionReasons: extractionResult.rejectionReasons } : {}),
+            } as any,
+          } : {}),
+          pipeline: {
+            mode: 'basic',
+            generators: liteGens.map(g => g.model),
+            critic: 'none',
+            synthesizer: 'none',
+            rounds: 1,
+            duration_ms: liteDurationMs,
+          },
+        };
+
+        return liteResult;
+      }
+    }
   }
 
-  // FAST PATH: basic mode — Generate (parallel) + Critic (fastest model) + skip Synthesizer
-  // Still does real adversarial critique, just faster: ~15s vs 37s full pipeline.
-  // basic mode: same pipeline as standard, just fewer providers (set upstream)
+  // ── STANDARD TIER PATH ────────────────────────────────────────────────────
+  // Full pipeline: generators + critic + synthesizer.
+  // Reached when: executedTier='standard', or lite fell through (split + escalation).
+  // When escalated from lite split, this is the actual executed tier = standard.
+  const standardExecutedTier: 'lite' | 'standard' = 'standard';
 
+  // Sandbox check (runs in parallel with pipeline)
+  const sandboxPromise = params.sandbox
+    ? runSandboxCheck(output)
+    : Promise.resolve(null);
 
-  // v0.5: Domain profile defaults
-  // v0.5.1: Domain lockfile — resolve effective domain (ratchet, not slider)
-  // v1.4: Auto-detect domain from claim text when not provided by caller
-  const autoDetectedDomain = !params.domain ? detectDomain(question) : undefined;
-  const effectiveDomain = resolveDomain(params.domain ?? autoDetectedDomain ?? 'general', params.domainLockfile);
+  // Domain config
   let domainConfig: DomainConfig | undefined;
   if (effectiveDomain) {
     domainConfig = DOMAIN_PROFILES[effectiveDomain];
@@ -563,14 +748,9 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const receptiveMode = params.receptiveMode ?? domainConfig?.receptiveMode;
   const outputFormat = params.outputFormat ?? 'human';
 
-  // v1.2: Proportional critic mode for low-stakes decisions
-  // If stakeLevel is micro/low and no explicit criticMode set, use proportional
-  // This prevents the critic from over-blocking well-justified low-stakes decisions
-  // Note: 'medium' intentionally excluded — auto-downgrade to proportional would be a silent breaking change
-  const stakeLevelLower = params.stakeLevel;
-  const useProportional = (stakeLevelLower === 'micro' || stakeLevelLower === 'low') && !params.criticMode;
+  // v1.2: Proportional critic for low-stakes decisions
+  const useProportional = (effectiveStakeLevel === 'low') && !params.criticMode;
 
-  // v0.6: Toxic combination auto-correction (upgrade from v0.5.1 warning-only)
   let effectiveCriticMode = useProportional ? 'proportional' as CriticMode : criticMode;
   let effectiveReceptiveMode = receptiveMode;
   let toxicCorrected: any = undefined;
@@ -591,9 +771,29 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     };
   }
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context }, gensProviders);
+  // Diversify inputs if enabled
+  let diversifiedInputsForGenerators: DiversifiedInput[] | undefined;
+  if (params.diversifyInputs === true && gensProviders.length > 1) {
+    const inputToDiversify = (params.extractFeatures === true && extractionResult?.claimCount && extractionResult.claimCount > 0)
+      ? extractionResult.sanitizedContent
+      : question;
+    diversifiedInputsForGenerators = diversifyInput(inputToDiversify, gensProviders.length, lang);
+  }
 
-  // v0.6: Multi-round fact-checking — the critic gets checked
+  let proposals: Proposal[] = await runGenerators(
+    gensProviders, claimWithContext, lang, false, undefined, diversifiedInputsForGenerators,
+  );
+  if (output) {
+    proposals.push({ model: 'user-output', content: sanitizedOutput });
+  }
+
+  const critique = await runCritic(
+    criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode,
+    { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context },
+    gensProviders,
+  );
+
+  // Multi-round fact-checking
   let factCheckedObjections: import('./pipeline/factcheck.js').FactCheckedObjection[] | undefined;
   let effectiveCritiqueContent = critique.content;
   let multiRoundSkipped = false;
@@ -617,6 +817,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
 
   const critiqueForSynthesis = { model: critique.model, content: effectiveCritiqueContent };
 
+  // Synthesizer
   let synthesis: Synthesis;
   let dissent: any = undefined;
 
@@ -636,18 +837,18 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       dual_synthesis: false,
       single_source_warning: "Only one provider available; dual synthesis skipped",
     };
-    synthesis = await runSynthesizer(synthProvider, synthModel, proposals, critiqueForSynthesis, lang, false, undefined, effectiveReceptiveMode);
+    synthesis = await runSynthesizer(
+      synthProvider, synthModel, proposals, critiqueForSynthesis, lang, false, undefined, effectiveReceptiveMode,
+    );
   }
 
   const genProposals = proposals.filter(p => p.model !== 'user-output');
   const balance = computeSynthesisBalance(genProposals, synthesis.content);
-  const mdi = computeMdi(genProposals);
+  const mdiValue = computeMdi(genProposals);
   const statedConfidence = parseConfidence(synthesis.content);
   const dpr = computeDPR(critique.content, synthesis.content, balance.warning);
 
-  // v1.1: Reasoning-based aggregation — derive independent confidence from patterns
-  // instead of trusting the synthesizer's stated number.
-  // Credit: voipbin-cco — "fool the consensus mechanism, not individual verifiers"
+  // Reasoning-based aggregation
   const aggregation = aggregateFromReasoning(
     genProposals,
     critique.content,
@@ -656,39 +857,27 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     classifyObjections ? parseClassifiedObjections(critique.content) : undefined,
   );
 
-  // Use aggregated confidence if it detects the stated value is inflated
   const confidence = aggregation.shouldOverride
     ? aggregation.aggregatedConfidence
     : statedConfidence;
 
   const flags: VerificationFlag[] = [];
 
-  // Adversarial pattern detection (static, pre-pipeline)
   if (adversarialScan.detected) {
     flags.push('adversarial-pattern');
-    // Append matched pattern names for transparency
     for (const p of adversarialScan.patterns) {
       flags.push(`adversarial:${p}`);
     }
   }
 
-  // Semantic flags from AI pipeline
   const UNVERIFIED_PATTERN = /\bunverified\b/i;
   if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
-  // Only flag synthesis-dominance when 3+ generators exist — with 2 generators,
-  // some dominance is expected and should not block VERIFIED verdict.
   if (balance.warning && gensProviders.length >= 3) flags.push('synthesis-dominance');
   if (dpr.false_consensus) flags.push('false-consensus');
-  if (mdi < 0.3) flags.push('low-model-diversity');
+  if (mdiValue < 0.3) flags.push('low-model-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
 
-  // v1.4: Disagreement Detection — when generators are split or no model is confident,
-  // override verdict to UNCERTAIN. Prevents a single confident synthesizer from masking
-  // genuine model disagreement (e.g. DeepSeek=HOLD, Gemini=ALLOW → result: UNCERTAIN).
-  //
-  // Trigger conditions (either):
-  //   1. Max individual proposal confidence < 0.80 (no model is sure)
-  //   2. Generator proposals are 50/50 split on allow vs. block keywords
+  // Disagreement detection
   const proposalContents = genProposals.map(p => p.content.toLowerCase());
   const allowSignals  = proposalContents.filter(c => /\ballow\b|\bsafe\b|\brecommend\b/.test(c)).length;
   const blockSignals  = proposalContents.filter(c => /\bblock\b|\bhold\b|\bdissent\b|\brisky\b|\bdanger/.test(c)).length;
@@ -703,50 +892,38 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (toxicWarning) flags.push('toxic-combination');
   if (multiRoundSkipped) flags.push('multiround-same-provider');
 
-  // Collect WASM sandbox result (was running in parallel with pipeline)
+  // Sandbox result
   const sandboxResult = await sandboxPromise;
   if (sandboxResult?.flags && sandboxResult.flags.length > 0) {
     flags.push(...sandboxResult.flags);
   }
 
-  // v1.1: Feature extraction flags
   if (extractionResult?.llmExtracted && extractionResult.claimCount === 0) {
     flags.push('empty-extraction');
   }
 
-  // v1.1: Reasoning aggregation flags
-  if (aggregation.divergesFromStated) {
-    flags.push('confidence-divergence');
-  }
-  if (aggregation.shouldOverride) {
-    flags.push('confidence-overridden');
-  }
+  if (aggregation.divergesFromStated) flags.push('confidence-divergence');
+  if (aggregation.shouldOverride) flags.push('confidence-overridden');
 
-  // v0.6.3: LLM guard injection flag
   if (guardResult?.injected) {
     flags.push('injection-detected');
     flags.push(`guard:${guardResult.model}`);
   }
 
-  // Cap confidence if adversarial patterns detected (static OR LLM guard)
+  // Confidence caps
   const guardCap = guardResult?.injected ? 0.25 : 1.0;
   const finalConfidence = (adversarialScan.detected || guardResult?.injected)
     ? Math.min(confidence, adversarialScan.confidence_cap, guardCap)
     : confidence;
 
-  // v0.5: Apply domain maxConfidence cap
   let cappedConfidence = finalConfidence;
   if (domainConfig?.maxConfidence) {
     cappedConfidence = Math.min(finalConfidence, domainConfig.maxConfidence);
   }
 
-  // v0.6: Auto-calibration — entropy-based confidence adjustment
-  // v1.1: Skip hedging-based calibration when aggregation already overrode confidence,
-  // because both analyze hedging language → double-counting would deflate unfairly.
-  // Credit: Steel Man review — "Calibration and Aggregation do the same thing on hedging"
+  // Auto-calibration
   let calibration: ReturnType<typeof calibrateConfidence>;
   if (aggregation.shouldOverride) {
-    // Aggregation already corrected for hedging — skip calibration to avoid double-count
     calibration = { calibratedConfidence: cappedConfidence, adjusted: false, delta: 0, originalConfidence: cappedConfidence, reason: 'skipped: aggregation override active' };
   } else {
     calibration = calibrateConfidence(cappedConfidence, synthesis.content);
@@ -756,7 +933,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     flags.push('calibration-mismatch');
   }
 
-  // v0.6.1: Calibrative critic mode — apply structural confidence adjustment
+  // Calibrative critic mode
   let calibrativeDelta: number | undefined;
   let calibrativeReason: string | undefined;
   if (effectiveCriticMode === 'calibrative') {
@@ -768,87 +945,96 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     if (calibrativeDelta > 0.05) flags.push('calibrative-upward');
   }
 
-  const verified = finalCalibratedConfidence > 0.75 && flags.length === 0 && balance.score > 0.6;
-
-  // v0.5: Parse classified objections if enabled
-  const classifiedObjs = classifyObjections ? parseClassifiedObjections(critique.content) : undefined;
-
-  // v1.2.1: Materiality-based confidence override
-  // If materiality classification is enabled, recalculate confidence based on materiality weights
-  // This replaces the synthesis-based confidence for ALLOW/HOLD decisions
+  // Materiality override
   let materialityResult: MaterialityResult | undefined;
   if (params.classifyMateriality) {
     materialityResult = parseMaterialityClassifications(critique.content);
     const materialityConfidence = calculateMaterialityConfidence(materialityResult);
 
-    // Use materiality confidence if it's HIGHER than synthesis confidence
-    // (materiality should promote ALLOW when no material defects exist, not demote)
-    // If material defects ARE found, take the LOWER of the two (conservative)
     if (materialityResult.hasMaterialDefect) {
       finalCalibratedConfidence = Math.min(finalCalibratedConfidence, materialityConfidence);
     } else {
-      // No material defects → use materiality confidence (likely higher)
-      // But cap it based on overall assessment
       const assessmentCaps: Record<string, number> = { sound: 0.95, adequate: 0.80, questionable: 0.60, deficient: 0.30 };
       const cap = assessmentCaps[materialityResult.overallAssessment] ?? 0.60;
       finalCalibratedConfidence = Math.min(cap, Math.max(finalCalibratedConfidence, materialityConfidence));
     }
   }
 
-  // v1.2: stakeLevel takes precedence, then failureCost, then default
-  // Import STAKE_THRESHOLDS inline to avoid circular deps
-  const STAKE_THRESHOLDS_MAP: Record<string, number> = { micro: 0.40, low: 0.50, medium: 0.60, high: 0.75, critical: 0.85 };
-  const verdictThreshold = params.stakeLevel
-    ? (STAKE_THRESHOLDS_MAP[params.stakeLevel] ?? 0.70)
-    : params.failureCost
-      ? FAILURE_COST_THRESHOLDS[params.failureCost]
-      : 0.70;
+  // ── Verdict threshold (stake > failureCost > default) ─────────────────────
+  const STAKE_THRESHOLDS_MAP: Record<string, number> = { low: 0.50, medium: 0.60, high: 0.75, critical: 0.85 };
+  const verdictThreshold = STAKE_THRESHOLDS_MAP[effectiveStakeLevel] ??
+    (params.failureCost ? FAILURE_COST_THRESHOLDS[params.failureCost] : 0.70);
 
-  // v0.3+v0.6+v1.3.2: Compute verdict enum
-  // Material defects → UNVERIFIED regardless of confidence (strongest signal)
-  // False consensus → DISSENT
-  // High confidence + clean → VERIFIED
-  // High confidence + flags → UNVERIFIED
-  // Low confidence → UNCERTAIN
-  let verdict: Verdict;
-  if (materialityResult?.hasMaterialDefect) {
-    verdict = 'UNVERIFIED';
-  } else if (dpr.false_consensus && finalCalibratedConfidence >= verdictThreshold) {
-    verdict = 'DISSENT';
+  // ── Internal four-tier verdict ────────────────────────────────────────────
+  let internalVerdict: InternalVerdict;
+  if (materialityResult?.hasMaterialDefect || (dpr.false_consensus && finalCalibratedConfidence >= verdictThreshold)) {
+    internalVerdict = 'DISSENT';
   } else if (hasDisagreement && !dpr.false_consensus) {
-    // v1.4: Generator disagreement → UNCERTAIN (generators split or all low-confidence)
-    // Do not override DISSENT — false consensus is a stronger signal.
-    verdict = 'UNCERTAIN';
+    internalVerdict = 'UNCERTAIN';
   } else if (finalCalibratedConfidence >= verdictThreshold && flags.length === 0 && balance.score > 0.6) {
-    verdict = 'VERIFIED';
+    internalVerdict = 'ALLOW';
   } else if (finalCalibratedConfidence >= verdictThreshold) {
-    verdict = 'UNVERIFIED';
+    internalVerdict = 'HOLD';
   } else {
-    verdict = 'UNCERTAIN';
+    internalVerdict = 'UNCERTAIN';
   }
+
+  // ── Map to public three-tier verdict ──────────────────────────────────────
+  const verdict: Verdict = mapVerdict(internalVerdict);
+  const severity_score = computeSeverityScore(internalVerdict, finalCalibratedConfidence);
+
+  // ── Domain mismatch UNCERTAIN trigger ─────────────────────────────────────
+  // Standard tier only: detected_domain="general" + stakeLevel ∈ {high, critical}
+  // → UNCERTAIN (pipeline lacks domain context for the risk level)
+  let domainMismatchUncertain = false;
+  if (
+    verdict !== 'UNCERTAIN' &&
+    effectiveDomain === 'general' &&
+    (effectiveStakeLevel === 'high' || effectiveStakeLevel === 'critical')
+  ) {
+    domainMismatchUncertain = true;
+    flags.push('domain-mismatch-escalation');
+  }
+
+  const finalVerdict: Verdict = domainMismatchUncertain ? 'UNCERTAIN' : verdict;
+  const finalSeverityScore: number | null = domainMismatchUncertain ? null : severity_score;
 
   const durationMs = Date.now() - startTime;
 
+  // ── Objections ────────────────────────────────────────────────────────────
+  const classifiedObjs = classifyObjections ? parseClassifiedObjections(critique.content) : undefined;
+  const objections: string[] = extractPublicObjections(classifiedObjs, critique.content);
+
+  // ── BiasMap ───────────────────────────────────────────────────────────────
   const biasMap = balance.generator_coverage.reduce((acc: Record<string, number>, d: { generator: string; share: number }) => {
     acc[d.generator] = d.share;
     return acc;
   }, {});
 
-  // v0.6: Cousin bias detection
+  // ── Cousin bias ───────────────────────────────────────────────────────────
   const cousinWarning = detectCousinBias(
     generatorModelNames, criticModel,
     Array.isArray(params.providers) ? params.providers as ProviderConfig[] : undefined,
   );
   if (cousinWarning.detected) flags.push('cousin-bias-risk');
 
+  // ── Build result ──────────────────────────────────────────────────────────
   const result = {
-    verified,
-    verdict,
-    confidence: finalCalibratedConfidence,
-    tier,
+    // v2.0 public fields (always present, invariants enforced)
+    verdict: finalVerdict,
+    confidence: parseFloat(finalCalibratedConfidence.toFixed(3)),
+    severity_score: finalSeverityScore,
+    mdi: parseFloat(mdiValue.toFixed(3)),
+    objections,
+    domain: effectiveDomain,
+    stakeLevel: effectiveStakeLevel,
+    tier: standardExecutedTier,
+    durationMs,
+
+    // Legacy / extended fields
+    verified: finalVerdict === 'ALLOW',
     flags,
     timestamp: new Date().toISOString(),
-    mdi: parseFloat(mdi.toFixed(3)),
     sas: balance.score,
     dpr,
     biasMap,
@@ -863,28 +1049,25 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       duration_ms: durationMs,
       ...(diversifiedInputsForGenerators ? { diversifiedInputs: diversifiedInputsForGenerators.map(d => d.type) } : {}),
     },
-    ...(sandboxResult ? { sandbox: sandboxResult } : {}),
-    ...(guardResult ? { guard: guardResult } : {}),
-    ...(extractionResult ? { extraction: { model: extractionResult.model, claimCount: extractionResult.claimCount, llmExtracted: extractionResult.llmExtracted, latencyMs: extractionResult.latencyMs, rejectedClaims: extractionResult.rejectedClaims, ...(extractionResult.rejectionReasons.length > 0 ? { rejectionReasons: extractionResult.rejectionReasons } : {}) } } : {}),
     aggregation: {
-      statedConfidence: statedConfidence,
+      statedConfidence,
       aggregatedConfidence: aggregation.aggregatedConfidence,
       divergence: aggregation.divergenceAmount,
       overridden: aggregation.shouldOverride,
       signals: aggregation.signals.map(s => ({ name: s.name, value: s.value, weight: s.weight, reason: s.reason })),
     },
+    ...(sandboxResult ? { sandbox: sandboxResult } : {}),
+    ...(guardResult ? { guard: guardResult } : {}),
+    ...(extractionResult ? { extraction: { model: extractionResult.model, claimCount: extractionResult.claimCount, llmExtracted: extractionResult.llmExtracted, latencyMs: extractionResult.latencyMs, rejectedClaims: extractionResult.rejectedClaims, ...(extractionResult.rejectionReasons.length > 0 ? { rejectionReasons: extractionResult.rejectionReasons } : {}) } } : {}),
     ...(classifiedObjs ? { classifiedObjections: classifiedObjs } : {}),
     ...(materialityResult ? { materiality: materialityResult } : {}),
-    ...(effectiveDomain ? { domain: effectiveDomain } : {}),
     ...(outputFormat !== 'human' ? { outputFormat } : {}),
     ...(factCheckedObjections ? { factCheckedObjections } : {}),
     ...(cousinWarning.detected ? { cousinWarning } : {}),
     ...(calibration.adjusted ? { calibrationAdjusted: true, calibrationDelta: calibration.delta } : {}),
     ...(params.failureCost ? { failureCostApplied: params.failureCost } : {}),
     ...(toxicCorrected ? { toxicCorrected } : {}),
-    // v0.6.1: calibrative mode metadata
     ...(calibrativeDelta !== undefined ? { calibrativeDelta, calibrativeReason } : {}),
-    // v0.6.1: audience metadata (only store if explicitly set)
     ...(params.audience ? { audience: params.audience } : {}),
   } as VerificationResult;
 
@@ -892,13 +1075,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     (result as any).raw = { proposals, critique, synthesis };
   }
 
-  // v0.6.1: Audience-aware output formatting
-  // 'human' (default): no transformation — full result returned
-  // 'pipeline': minimal actionable shape appended as pipelineResult
+  // Audience: pipeline formatting
   if (params.audience === 'pipeline') {
     const topObj = result.classifiedObjections?.[0];
     const pipelineResult: PipelineResult = {
-      pass: verdict === 'VERIFIED',
+      pass: finalVerdict === 'ALLOW',
       confidence: result.confidence,
       flags: result.flags,
       verdict: result.verdict,

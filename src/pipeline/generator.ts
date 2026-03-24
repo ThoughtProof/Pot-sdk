@@ -78,18 +78,24 @@ export async function runGenerators(
         // Tag the proposal with its representation type for transparency
         ...(repType && repType !== 'original' ? { representationType: repType } : {}),
       }))
-      .catch((error: Error) => ({
-        model: model.split('/').pop() || model,
-        content: `[ERROR] ${provider.name} (${model}) failed: ${error.message}`,
-      }));
+      .catch((error: Error) => {
+        console.warn(`[pot-sdk] Generator failed — model: ${model}, provider: ${provider.name}, error: ${error.message}`);
+        return null;
+      });
   });
 
-  const results = await Promise.all(promises);
-  const successful = results.filter(r => !r.content.startsWith('[ERROR]'));
-  
-  if (successful.length === 0) {
-    throw new Error('All generators failed. Check API keys and connectivity.');
+  const allResults = await Promise.all(promises);
+  const successful = allResults.filter((r): r is Proposal => r !== null);
+
+  // Require at least 2 successful generators (or all, if fewer than 2 were configured)
+  const minRequired = Math.min(2, providers.length);
+  if (successful.length < minRequired) {
+    const failedCount = providers.length - successful.length;
+    throw new Error(
+      `Not enough generators succeeded (${successful.length}/${providers.length}). ` +
+      `${failedCount} generator(s) failed. Minimum ${minRequired} required. Check API keys and connectivity.`
+    );
   }
-  
-  return results;
+
+  return successful;
 }

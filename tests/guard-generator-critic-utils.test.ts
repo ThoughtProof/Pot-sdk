@@ -203,24 +203,36 @@ describe('runGenerator / runGenerators', () => {
     expect(results[1]).toMatchObject({ model: 'claude', representationType: 'structured', content: 'Response B' });
   });
 
-  it('returns error placeholders for failed generators and throws only if all fail', async () => {
+  it('filters out failed generators and throws when fewer than min succeed', async () => {
     const okProvider = makeProvider(async () => ({ content: 'usable result' }));
     const badProvider = makeProvider(async () => {
       throw new Error('rate limited');
     });
 
+    // With 1 ok + 1 bad out of 2: min required = 2, so this throws
+    await expect(
+      runGenerators(
+        [
+          { provider: okProvider, model: 'good/model' },
+          { provider: badProvider, model: 'bad/model' },
+        ],
+        'Question',
+      ),
+    ).rejects.toThrow('Not enough generators succeeded');
+
+    // With 3 providers and 2 succeeding: min required = 2, passes
     const mixed = await runGenerators(
       [
-        { provider: okProvider, model: 'good/model' },
+        { provider: okProvider, model: 'good/one' },
+        { provider: okProvider, model: 'good/two' },
         { provider: badProvider, model: 'bad/model' },
       ],
       'Question',
     );
+    expect(mixed).toHaveLength(2);
+    expect(mixed.every(r => r.content === 'usable result')).toBe(true);
 
-    expect(mixed[0].content).toBe('usable result');
-    expect(mixed[1].content).toContain('[ERROR]');
-    expect(mixed[1].content).toContain('rate limited');
-
+    // All fail → throws
     await expect(
       runGenerators(
         [
@@ -229,7 +241,7 @@ describe('runGenerator / runGenerators', () => {
         ],
         'Question',
       ),
-    ).rejects.toThrow('All generators failed');
+    ).rejects.toThrow('Not enough generators succeeded');
   });
 });
 

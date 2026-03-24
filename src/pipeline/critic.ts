@@ -309,7 +309,8 @@ export async function runCritic(
   dryRun: boolean = false,
   contextText?: string,
   criticMode: CriticMode = 'adversarial',
-  options?: { requireCitation?: boolean; classifyObjections?: boolean; classifyMateriality?: boolean; trustContext?: { trusted?: string; toVerify?: string } }
+  options?: { requireCitation?: boolean; classifyObjections?: boolean; classifyMateriality?: boolean; trustContext?: { trusted?: string; toVerify?: string } },
+  fallbackProviders?: Array<{ provider: Provider; model: string }>,
 ): Promise<Critique> {
   if (dryRun) {
     return {
@@ -376,11 +377,44 @@ ALSO provide an OVERALL ASSESSMENT at the end:
 When in doubt between material and notable, classify as MATERIAL. The system's bias should remain conservative.`;
   }
 
-  const response = await provider.call(model, prompt);
+  let response: { content: string };
+  let usedModel = model;
+
+  try {
+    response = await provider.call(model, prompt);
+  } catch (primaryError: unknown) {
+    const primaryMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+    console.warn(`[pot-sdk] Critic failed — model: ${model}, provider: ${provider.name}, error: ${primaryMsg}`);
+
+    if (!fallbackProviders || fallbackProviders.length === 0) {
+      throw new Error(`Critic provider failed and no fallbacks available: ${primaryMsg}`);
+    }
+
+    let fallbackSucceeded = false;
+    for (const fallback of fallbackProviders) {
+      try {
+        console.warn(
+          `[pot-sdk] Critic fallback — trying: ${fallback.model} ` +
+          `(⚠️ author-verifier separation compromised: generator model used as critic)`
+        );
+        response = await fallback.provider.call(fallback.model, prompt);
+        usedModel = fallback.model;
+        fallbackSucceeded = true;
+        break;
+      } catch (fallbackError: unknown) {
+        const fbMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        console.warn(`[pot-sdk] Critic fallback also failed — model: ${fallback.model}, error: ${fbMsg}`);
+      }
+    }
+
+    if (!fallbackSucceeded) {
+      throw new Error(`Critic provider and all fallbacks failed. Last error: ${primaryMsg}`);
+    }
+  }
 
   return {
-    model: model.split('/').pop() || model,
-    content: response.content,
+    model: usedModel.split('/').pop() || usedModel,
+    content: response!.content,
   };
 }
 

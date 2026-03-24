@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'crypto';
 import type { VerificationResult, TPVerificationCredential, DPRResult } from './types.js';
 import { canonicalize } from './schema.js';
 
-const SDK_VERSION = '0.3.0';
+const SDK_VERSION = '2.0.0';
 
 export interface AttestationOptions {
   /** The original claim text that was verified */
@@ -59,7 +59,7 @@ export function createAttestation(
   const vcBody: Omit<TPVerificationCredential, 'proof'> = {
     '@context': 'https://thoughtproof.ai/ctx/a2a/v1',
     type: 'VerificationCredential',
-    tp_version: '0.3',
+    tp_version: '2.0',
     id,
     issued_at: now,
     expires_at: null,
@@ -84,7 +84,7 @@ export function createAttestation(
       consensus_threshold: 0.70,
       consensus_reached: result.confidence >= 0.70,
       metrics: {
-        mdi: result.mdi || 0,
+        mdi: result.mdi ?? null,
         sas: result.sas || 0,
         dpr: result.dpr || defaultDpr,
       },
@@ -95,7 +95,7 @@ export function createAttestation(
     },
 
     pipeline: result.pipeline || {
-      mode: result.tier === 'pro' ? 'standard' : 'basic',
+      mode: result.tier === 'standard' ? 'standard' : 'basic',
       generators: [],
       critic: '',
       synthesizer: '',
