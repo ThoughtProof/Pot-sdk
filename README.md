@@ -109,12 +109,72 @@ Built-in: Anthropic, OpenAI, xAI, DeepSeek, Moonshot
 
 Any OpenAI-compatible endpoint works via `baseUrl` (Ollama, Together.ai, custom deployments). BYOK — no keys bundled, everything runs on your infrastructure.
 
+## 🌍 NEW: Prediction Market Integration
+
+**Human Collective Intelligence meets Machine Consensus.**
+
+ThoughtProof now integrates Polymarket prediction signals as a calibration layer alongside multi-model verification. No one else combines AI reasoning verification with prediction market data pre-settlement.
+
+```typescript
+import { enrichVerification } from '@pot-sdk2/polymarket';
+
+// After model consensus is computed, enrich with crowd intelligence
+const enriched = await enrichVerification({
+  claim: 'Bitcoin will reach $200K by end of 2026',
+  modelVerdict: 'ALLOW',
+  modelConfidence: 0.72,
+  stakeLevel: 'high',
+});
+
+// Machine + Human intelligence alignment
+if (enriched.verdictAdjustment === 'flag') {
+  console.log('⚠️ Crowd disagrees with models — recommend human review');
+}
+if (enriched.verdictAdjustment === 'strengthen') {
+  console.log('✅ Machine + Human intelligence aligned — higher confidence');
+}
+```
+
+### How it works
+
+1. **Machine Consensus** — 3 models (DeepSeek + Grok + Sonnet) verify reasoning adversarially
+2. **Human Collective Intelligence** — Polymarket probability signals from liquid markets (>$500K OI)
+3. **Enrichment** — PM data can strengthen, weaken, or flag the model verdict
+4. **Fail-open** — If PM API unavailable, verification continues with models only
+
+### Why prediction markets?
+
+- 79% more accurate than alternative forecast methods ([meta-analysis, 24 studies](https://iceb.johogo.com/proceedings/2020/ICEB_2020_paper_03_full.pdf))
+- $64B in volume (2025), $325B+ run-rate (2026)
+- Real money backing every probability = skin in the game
+- No single AI model. No blind trust. Humans AND machines verify each other.
+
+### Packages
+
+| Package | Description |
+|---------|-------------|
+| `pot-sdk` | Core multi-model verification |
+| `@pot-sdk2/polymarket` | Prediction market signals (Human Collective Intelligence) |
+| `@pot-sdk2/friend` | Persistent critic with memory |
+| `@pot-sdk2/bridge` | Cross-agent trust verification |
+| `@pot-sdk2/graph` | Structural knowledge-graph verification |
+| `@pot-sdk2/pay` | Payment reasoning verification (x402) |
+
+### Demo
+
+```bash
+npx tsx examples/prediction-market-verification.ts
+```
+
 ## Learn More
 
 - [Protocol Specification](https://thoughtproof.ai)
 - [pot-cli](https://github.com/ThoughtProof/pot-cli) — CLI version
 - [Benchmarks](https://thoughtproof.ai/blog) — 96.7% adversarial detection, 92% hallucination detection
+- [Prediction Market Research](https://github.com/ThoughtProof/Pot-sdk/tree/master/packages/polymarket) — @pot-sdk2/polymarket docs
 
 ---
 
 Built with the [ThoughtProof Protocol](https://thoughtproof.ai). MIT License.
+
+*The trust layer between collective intelligence and autonomous execution.*
