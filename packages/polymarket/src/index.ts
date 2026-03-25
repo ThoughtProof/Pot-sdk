@@ -45,6 +45,7 @@ export type {
   CollectiveIntelligenceResult,
   PolymarketConfig,
   PolymarketEnrichment,
+  MarketReference,
 } from './types.js';
 
 export { DEFAULT_CONFIG } from './types.js';
@@ -69,6 +70,7 @@ export {
   extractSearchTerms,
   matchScore,
   queryCollectiveIntelligence,
+  queryByMarket,
 } from './analyzer.js';
 
 // ─── Verification Integration ──────────────────────────────

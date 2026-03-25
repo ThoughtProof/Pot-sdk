@@ -20,9 +20,10 @@ import type {
   PolymarketConfig,
   PolymarketEnrichment,
   CollectiveIntelligenceResult,
+  MarketReference,
 } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
-import { queryCollectiveIntelligence } from './analyzer.js';
+import { queryCollectiveIntelligence, queryByMarket } from './analyzer.js';
 
 // ─── Verdict Types (matching pot-sdk core) ─────────────────
 
@@ -39,6 +40,13 @@ interface VerificationContext {
   domain?: string;
   /** Stake level of the decision */
   stakeLevel?: 'low' | 'medium' | 'high' | 'critical';
+  /**
+   * Direct market reference — PREFERRED for agentic commerce.
+   * When the agent already knows which market it's trading on,
+   * pass the conditionId directly. Skips keyword matching entirely.
+   * Faster, more accurate, zero ambiguity.
+   */
+  market?: MarketReference;
 }
 
 // ─── Main Enrichment Function ──────────────────────────────
@@ -51,16 +59,25 @@ interface VerificationContext {
  *
  * @example
  * ```ts
- * const modelResult = await pot.verify(claim);
+ * // Option A: Keyword search (generic claims)
  * const enriched = await enrichVerification({
- *   claim,
- *   modelVerdict: modelResult.verdict,
- *   modelConfidence: modelResult.confidence,
+ *   claim: 'Bitcoin will reach $200K',
+ *   modelVerdict: 'ALLOW',
+ *   modelConfidence: 0.72,
  *   stakeLevel: 'high',
  * });
  *
- * // Use enriched.contextForSynthesis in final output
- * // Check enriched.verdictAdjustment for any flags
+ * // Option B: Direct market ID (agentic commerce — PREFERRED)
+ * const enriched = await enrichVerification({
+ *   claim: 'Buying YES on BTC $200K market',
+ *   modelVerdict: 'ALLOW',
+ *   modelConfidence: 0.72,
+ *   stakeLevel: 'high',
+ *   market: {
+ *     conditionId: '0xabc123',
+ *     outcome: 'YES',
+ *   },
+ * });
  * ```
  */
 export async function enrichVerification(
@@ -68,10 +85,11 @@ export async function enrichVerification(
   config: PolymarketConfig = DEFAULT_CONFIG
 ): Promise<PolymarketEnrichment> {
   try {
-    const result = await queryCollectiveIntelligence(
-      context.claim,
-      config
-    );
+    // If agent provides a direct market reference, use it (faster + accurate)
+    // Otherwise fall back to keyword-based search
+    const result = context.market
+      ? await queryByMarket(context.claim, context.market, config)
+      : await queryCollectiveIntelligence(context.claim, config);
 
     if (!result.primarySignal || result.alignment === 'no_data') {
       return {

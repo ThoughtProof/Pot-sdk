@@ -133,3 +133,14 @@ export interface PolymarketEnrichment {
   /** Additional context for the verification synthesis */
   contextForSynthesis: string;
 }
+
+// ─── Direct Market Lookup ──────────────────────────────────
+
+export interface MarketReference {
+  /** Polymarket condition ID — the agent already knows this */
+  conditionId: string;
+  /** Optional CLOB token ID for order book data */
+  tokenId?: string;
+  /** Which outcome the agent is betting on */
+  outcome?: 'YES' | 'NO';
+}

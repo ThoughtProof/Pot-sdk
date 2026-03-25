@@ -210,6 +210,47 @@ describe('marketToSignal', () => {
   });
 });
 
+// ─── Direct Market Reference Tests ─────────────────────────
+
+describe('MarketReference type', () => {
+  it('supports conditionId only (minimal)', () => {
+    const ref = { conditionId: '0xabc123' };
+    expect(ref.conditionId).toBe('0xabc123');
+  });
+
+  it('supports full reference with outcome', () => {
+    const ref = {
+      conditionId: '0xabc123',
+      tokenId: '12345',
+      outcome: 'YES' as const,
+    };
+    expect(ref.outcome).toBe('YES');
+    expect(ref.tokenId).toBe('12345');
+  });
+
+  it('supports NO outcome', () => {
+    const ref = {
+      conditionId: '0xabc123',
+      outcome: 'NO' as const,
+    };
+    expect(ref.outcome).toBe('NO');
+  });
+});
+
+// ─── Signal for NO outcome ─────────────────────────────────
+
+describe('marketToSignal with NO outcome context', () => {
+  it('YES price is used by default as probability', () => {
+    const signal = marketToSignal(liquidMarket);
+    expect(signal.probability).toBe(liquidMarket.outcomePriceYes);
+  });
+
+  it('market provides both YES and NO prices', () => {
+    expect(liquidMarket.outcomePriceYes).toBe(0.35);
+    expect(liquidMarket.outcomePriceNo).toBe(0.65);
+  });
+});
+
 // ─── Config Tests ──────────────────────────────────────────
 
 describe('DEFAULT_CONFIG', () => {

@@ -16,9 +16,10 @@ import type {
   SignalStrength,
   CollectiveIntelligenceResult,
   PolymarketConfig,
+  MarketReference,
 } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
-import { searchMarkets, searchEvents } from './fetcher.js';
+import { searchMarkets, searchEvents, getMarket } from './fetcher.js';
 
 // ─── Signal Analysis ───────────────────────────────────────
 
@@ -279,11 +280,87 @@ export async function queryCollectiveIntelligence(
   };
 }
 
+/**
+ * Query collective intelligence using a direct market reference.
+ *
+ * This is the PREFERRED method for agentic commerce — the agent already
+ * knows which market it's trading on, so we skip keyword matching entirely.
+ * Faster, more accurate, zero ambiguity.
+ *
+ * @example
+ * ```ts
+ * // Agent is about to buy YES on a specific Polymarket market
+ * const result = await queryByMarket(
+ *   'Bitcoin will reach $200K — buying YES at 0.35',
+ *   { conditionId: '0xabc123', outcome: 'YES' }
+ * );
+ * ```
+ */
+export async function queryByMarket(
+  claim: string,
+  marketRef: MarketReference,
+  config: PolymarketConfig = DEFAULT_CONFIG
+): Promise<CollectiveIntelligenceResult> {
+  const fetchedAt = new Date().toISOString();
+
+  try {
+    const market = await getMarket(marketRef.conditionId, config);
+
+    if (!market) {
+      return noDataResult(
+        claim,
+        fetchedAt,
+        `Market ${marketRef.conditionId} not found on Polymarket.`
+      );
+    }
+
+    const signal = marketToSignal(market, config);
+
+    // If agent specified an outcome, adjust the probability accordingly
+    // Agent betting NO means they think the probability should be LOWER
+    if (marketRef.outcome === 'NO') {
+      signal.probability = market.outcomePriceNo;
+      signal.rationale = signal.rationale.replace(
+        /shows \d+\.\d+%/,
+        `shows ${(market.outcomePriceNo * 100).toFixed(1)}%`
+      );
+    }
+
+    const collectiveConfidence = signal.signalConfidence;
+    const alignment = determineAlignment(claim, signal);
+
+    const synthesis = buildSynthesis(
+      claim,
+      signal,
+      1,
+      collectiveConfidence
+    );
+
+    return {
+      claim,
+      primarySignal: signal,
+      signals: [signal],
+      collectiveConfidence,
+      alignment,
+      synthesis,
+      fetchedAt,
+      staleness: 'fresh',
+    };
+  } catch (error) {
+    return noDataResult(
+      claim,
+      fetchedAt,
+      `Failed to fetch market ${marketRef.conditionId}: ${error instanceof Error ? error.message : 'unknown'}`
+    );
+  }
+}
+
 // ─── Internal Helpers ──────────────────────────────────────
 
 function noDataResult(
   claim: string,
-  fetchedAt: string
+  fetchedAt: string,
+  reason?: string
 ): CollectiveIntelligenceResult {
   return {
     claim,
@@ -292,6 +369,7 @@ function noDataResult(
     collectiveConfidence: 0,
     alignment: 'no_data',
     synthesis:
+      reason ||
       'No relevant prediction market data found for this claim. Verification relies on multi-model consensus only.',
     fetchedAt,
     staleness: 'fresh',
