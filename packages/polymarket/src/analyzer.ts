@@ -19,7 +19,7 @@ import type {
   MarketReference,
 } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
-import { searchMarkets, searchEvents, getMarket } from './fetcher.js';
+import { searchMarkets, searchEvents, getMarket, meetsLiquidityThreshold } from './fetcher.js';
 
 // ─── Signal Analysis ───────────────────────────────────────
 
@@ -53,16 +53,20 @@ export function classifySignalStrength(
 /**
  * Compute signal confidence (0-1) from market metrics.
  *
+ * Uses configurable weights (defaults are HEURISTIC, not empirically calibrated).
+ * Override config.confidenceWeights with your own calibrated values.
+ *
  * Combines:
  * - Liquidity depth (OI relative to threshold)
- * - Spread quality (tighter = better)
+ * - Spread quality (tighter = better, uses CLOB data when available)
  * - Volume intensity (more trading = more information)
- * - Market maturity (total volume as proxy)
  */
 export function computeSignalConfidence(
   market: PolymarketMarket,
   config: PolymarketConfig = DEFAULT_CONFIG
 ): number {
+  const weights = config.confidenceWeights;
+
   // Liquidity score (0-1): how much OI vs our minimum
   const liquidityScore = Math.min(
     market.openInterest / config.minOpenInterest,
@@ -81,10 +85,11 @@ export function computeSignalConfidence(
     1
   );
 
-  // Weighted combination
-  // Liquidity is king — a well-funded market is the best signal
+  // Weighted combination using configurable weights
   const confidence =
-    liquidityScore * 0.45 + spreadScore * 0.25 + volumeScore * 0.3;
+    liquidityScore * weights.liquidity +
+    spreadScore * weights.spread +
+    volumeScore * weights.volume;
 
   return Math.round(confidence * 1000) / 1000; // 3 decimal places
 }
@@ -171,14 +176,13 @@ export function matchScore(claim: string, marketQuestion: string): number {
   return Math.min(matches / claimTerms.length, 1);
 }
 
-// ─── Main Integration Function ─────────────────────────────
+// ─── Main Integration Functions ────────────────────────────
 
 /**
- * Query Polymarket for signals relevant to a claim.
+ * Query Polymarket for signals relevant to a claim (keyword search).
  *
- * This is the primary function that pot-sdk verification pipeline calls.
- * It searches markets, analyzes signals, and returns a structured result
- * that can be folded into the multi-model consensus.
+ * For agentic commerce where the agent knows the market ID,
+ * prefer queryByMarket() instead — faster and more accurate.
  */
 export async function queryCollectiveIntelligence(
   claim: string,
@@ -248,7 +252,7 @@ export async function queryCollectiveIntelligence(
   // Convert to signals
   const signals = scored.map((s) => marketToSignal(s.market, config));
 
-  // Primary signal = best match that meets liquidity threshold
+  // Primary signal = best match that meets liquidity threshold (runtime check)
   const primarySignal =
     signals.find(
       (s) => s.strength === 'strong' || s.strength === 'moderate'
@@ -258,7 +262,7 @@ export async function queryCollectiveIntelligence(
   const collectiveConfidence = computeCompositeConfidence(signals);
 
   // Determine alignment
-  const alignment = determineAlignment(claim, primarySignal);
+  const alignment = determineAlignment(primarySignal);
 
   // Build synthesis
   const synthesis = buildSynthesis(
@@ -287,14 +291,10 @@ export async function queryCollectiveIntelligence(
  * knows which market it's trading on, so we skip keyword matching entirely.
  * Faster, more accurate, zero ambiguity.
  *
- * @example
- * ```ts
- * // Agent is about to buy YES on a specific Polymarket market
- * const result = await queryByMarket(
- *   'Bitcoin will reach $200K — buying YES at 0.35',
- *   { conditionId: '0xabc123', outcome: 'YES' }
- * );
- * ```
+ * Supports three modes:
+ * 1. snapshot provided → zero API calls, instant
+ * 2. conditionId only → one Gamma API call
+ * 3. conditionId + tokenId → Gamma + CLOB for real spread
  */
 export async function queryByMarket(
   claim: string,
@@ -304,7 +304,12 @@ export async function queryByMarket(
   const fetchedAt = new Date().toISOString();
 
   try {
-    const market = await getMarket(marketRef.conditionId, config);
+    // If agent provided a snapshot, use it directly — zero API calls
+    let market: PolymarketMarket | null = marketRef.snapshot || null;
+
+    if (!market) {
+      market = await getMarket(marketRef.conditionId, config);
+    }
 
     if (!market) {
       return noDataResult(
@@ -316,18 +321,22 @@ export async function queryByMarket(
 
     const signal = marketToSignal(market, config);
 
-    // If agent specified an outcome, adjust the probability accordingly
-    // Agent betting NO means they think the probability should be LOWER
+    // If agent specified an outcome, adjust probability AND context
     if (marketRef.outcome === 'NO') {
       signal.probability = market.outcomePriceNo;
-      signal.rationale = signal.rationale.replace(
-        /shows \d+\.\d+%/,
-        `shows ${(market.outcomePriceNo * 100).toFixed(1)}%`
+      signal.rationale = buildRationale(
+        market, signal.strength, signal.signalConfidence,
+        'NO', market.outcomePriceNo
       );
     }
 
     const collectiveConfidence = signal.signalConfidence;
-    const alignment = determineAlignment(claim, signal);
+
+    // Alignment considers the agent's INTENDED outcome
+    const alignment = determineAlignmentWithIntent(
+      signal,
+      marketRef.outcome || 'YES'
+    );
 
     const synthesis = buildSynthesis(
       claim,
@@ -344,7 +353,7 @@ export async function queryByMarket(
       alignment,
       synthesis,
       fetchedAt,
-      staleness: 'fresh',
+      staleness: marketRef.snapshot ? 'recent' : 'fresh',
     };
   } catch (error) {
     return noDataResult(
@@ -379,7 +388,6 @@ function noDataResult(
 function computeCompositeConfidence(signals: PredictionSignal[]): number {
   if (signals.length === 0) return 0;
 
-  // Weighted average: stronger signals count more
   const strengthWeights: Record<SignalStrength, number> = {
     strong: 1.0,
     moderate: 0.7,
@@ -401,31 +409,63 @@ function computeCompositeConfidence(signals: PredictionSignal[]): number {
     : 0;
 }
 
+/**
+ * Determine alignment for keyword-search mode (no intent known).
+ * Simply looks at the YES probability.
+ */
 function determineAlignment(
-  claim: string,
   signal: PredictionSignal | null
 ): 'supports' | 'contradicts' | 'neutral' | 'no_data' {
   if (!signal) return 'no_data';
 
-  // High probability (>70%) in a liquid market = supports affirmative claims
   if (signal.probability >= 0.7 && signal.strength !== 'insufficient') {
     return 'supports';
   }
-  // Low probability (<30%) = contradicts affirmative claims
   if (signal.probability <= 0.3 && signal.strength !== 'insufficient') {
     return 'contradicts';
   }
   return 'neutral';
 }
 
+/**
+ * Determine alignment considering the agent's intended outcome.
+ *
+ * This fixes the bug where an agent buying NO at 0.35 YES / 0.65 NO
+ * was treated as "neutral" when it should be "supports" (the market
+ * agrees: NO is more likely).
+ *
+ * Logic:
+ * - Agent buys YES → high YES price = supports, low YES price = contradicts
+ * - Agent buys NO → high NO price = supports, low NO price = contradicts
+ */
+export function determineAlignmentWithIntent(
+  signal: PredictionSignal,
+  agentOutcome: 'YES' | 'NO'
+): 'supports' | 'contradicts' | 'neutral' | 'no_data' {
+  if (signal.strength === 'insufficient') return 'neutral';
+
+  const relevantPrice =
+    agentOutcome === 'YES'
+      ? signal.market.outcomePriceYes
+      : signal.market.outcomePriceNo;
+
+  if (relevantPrice >= 0.7) return 'supports';
+  if (relevantPrice <= 0.3) return 'contradicts';
+  return 'neutral';
+}
+
 function buildRationale(
   market: PolymarketMarket,
   strength: SignalStrength,
-  confidence: number
+  confidence: number,
+  outcome: 'YES' | 'NO' = 'YES',
+  overridePrice?: number
 ): string {
   const oi = formatUsd(market.openInterest);
   const vol = formatUsd(market.volumeTotal);
-  const pct = (market.outcomePriceYes * 100).toFixed(1);
+  const price = overridePrice ?? market.outcomePriceYes;
+  const pct = (price * 100).toFixed(1);
+  const spreadSource = market.spreadFromClob ? 'CLOB' : 'estimated';
 
   const strengthLabel = {
     strong: 'High-confidence signal',
@@ -434,7 +474,7 @@ function buildRationale(
     insufficient: 'Insufficient data (market too thin)',
   }[strength];
 
-  return `${strengthLabel}: Market "${market.question}" shows ${pct}% probability (YES). Backed by ${oi} open interest, ${vol} total volume. Spread: ${(market.spread * 100).toFixed(2)}%. Signal confidence: ${(confidence * 100).toFixed(1)}%.`;
+  return `${strengthLabel}: Market "${market.question}" shows ${pct}% probability (${outcome}). Backed by ${oi} open interest, ${vol} total volume. Spread: ${(market.spread * 100).toFixed(2)}% (${spreadSource}). Signal confidence: ${(confidence * 100).toFixed(1)}%.`;
 }
 
 function buildSynthesis(

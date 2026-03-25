@@ -42,14 +42,14 @@ export interface PolymarketMarket {
   openInterest: number;
   /** Number of unique traders */
   uniqueTraders: number;
-  /** Best bid price (YES side) */
+  /** Best bid price (YES side) — from CLOB order book when available */
   bestBid: number;
-  /** Best ask price (YES side) */
+  /** Best ask price (YES side) — from CLOB order book when available */
   bestAsk: number;
-  /** Bid-ask spread */
+  /** Bid-ask spread — from CLOB order book (real) or estimated from prices (fallback) */
   spread: number;
-  /** Whether this market meets our liquidity threshold */
-  meetsLiquidityThreshold: boolean;
+  /** Whether spread data comes from CLOB (true) or is estimated (false) */
+  spreadFromClob: boolean;
 }
 
 // ─── Signal & Confidence ───────────────────────────────────
@@ -92,10 +92,23 @@ export interface CollectiveIntelligenceResult {
 
 // ─── Configuration ─────────────────────────────────────────
 
+export interface ConfidenceWeights {
+  /**
+   * Weight for liquidity (OI relative to threshold). Default: 0.45
+   * NOTE: These weights are heuristic, not empirically derived.
+   * Override with your own calibrated weights if you have benchmark data.
+   */
+  liquidity: number;
+  /** Weight for spread quality. Default: 0.25 */
+  spread: number;
+  /** Weight for volume intensity. Default: 0.30 */
+  volume: number;
+}
+
 export interface PolymarketConfig {
   /** Minimum open interest (USDC) to consider a market signal reliable */
   minOpenInterest: number;
-  /** Maximum acceptable bid-ask spread (0-1) */
+  /** Maximum acceptable bid-ask spread (0-1) — this is the REAL bid-ask spread from CLOB */
   maxSpread: number;
   /** Gamma API base URL */
   gammaApiUrl: string;
@@ -107,6 +120,13 @@ export interface PolymarketConfig {
   cacheTtlSeconds: number;
   /** Maximum number of markets to search */
   maxMarkets: number;
+  /**
+   * Confidence score weights. Heuristic defaults — not empirically calibrated.
+   * TODO: Run historical backtests to derive optimal weights.
+   */
+  confidenceWeights: ConfidenceWeights;
+  /** Whether to fetch CLOB order book for real spread data (slower but accurate) */
+  fetchOrderBook: boolean;
 }
 
 export const DEFAULT_CONFIG: PolymarketConfig = {
@@ -117,6 +137,12 @@ export const DEFAULT_CONFIG: PolymarketConfig = {
   timeout: 10_000,
   cacheTtlSeconds: 300,      // 5 min cache
   maxMarkets: 20,
+  confidenceWeights: {
+    liquidity: 0.45,  // Heuristic — not empirically derived
+    spread: 0.25,     // Heuristic — not empirically derived
+    volume: 0.30,     // Heuristic — not empirically derived
+  },
+  fetchOrderBook: true,  // Get real spread from CLOB by default
 };
 
 // ─── Integration with pot-sdk ──────────────────────────────
@@ -143,4 +169,10 @@ export interface MarketReference {
   tokenId?: string;
   /** Which outcome the agent is betting on */
   outcome?: 'YES' | 'NO';
+  /**
+   * Pre-fetched market snapshot. When provided, we skip the API call entirely.
+   * Use this when the agent already fetched market data during its analysis phase.
+   * Avoids re-fetch divergence (agent decided at 0.35, we verify at 0.37).
+   */
+  snapshot?: PolymarketMarket;
 }

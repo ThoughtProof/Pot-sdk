@@ -7,6 +7,11 @@
  * Endpoints used (all public, no auth required):
  * - Gamma API: Market discovery, events, search
  * - CLOB API: Order book data, prices, spreads
+ *
+ * Includes:
+ * - Token bucket rate limiting (self-throttle before getting 429'd)
+ * - Typed errors (RateLimitError, MarketNotFoundError, etc.)
+ * - CLOB order book integration for real bid-ask spreads
  */
 
 import type {
@@ -15,6 +20,12 @@ import type {
   PolymarketMarket,
 } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
+import {
+  RateLimitError,
+  ApiDownError,
+  TimeoutError,
+} from './errors.js';
+import { waitAndConsume } from './rate-limiter.js';
 
 // ─── Response Types (Polymarket API shapes) ────────────────
 
@@ -33,7 +44,7 @@ interface GammaMarketResponse {
   liquidity: string;
   liquidity_num: number;
   open_interest?: number;
-  // Events data
+  clobTokenIds?: string; // JSON string: "[\"token1\",\"token2\"]"
   events?: Array<{
     id: string;
     title: string;
@@ -56,14 +67,6 @@ interface ClobBookResponse {
   asset_id: string;
   bids: Array<{ price: string; size: string }>;
   asks: Array<{ price: string; size: string }>;
-}
-
-interface ClobPriceResponse {
-  mid: string;
-  bid: string;
-  ask: string;
-  spread: string;
-  last_trade_price?: string;
 }
 
 // ─── Cache ─────────────────────────────────────────────────
@@ -93,8 +96,12 @@ function setCache<T>(key: string, data: T): void {
 
 async function fetchJson<T>(
   url: string,
-  config: PolymarketConfig
+  config: PolymarketConfig,
+  endpoint: 'gamma' | 'clob' = 'gamma'
 ): Promise<T> {
+  // Rate limit check — wait if needed
+  await waitAndConsume(endpoint);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
@@ -103,19 +110,76 @@ async function fetchJson<T>(
       signal: controller.signal,
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'ThoughtProof-SDK/0.1.0',
+        'User-Agent': 'ThoughtProof-SDK/0.2.0',
       },
     });
 
+    if (response.status === 429) {
+      const retryAfter = parseInt(response.headers.get('retry-after') || '10', 10);
+      throw new RateLimitError(url, retryAfter * 1000);
+    }
+
+    if (response.status >= 500) {
+      throw new ApiDownError(url, response.status);
+    }
+
     if (!response.ok) {
-      throw new Error(
-        `Polymarket API error: ${response.status} ${response.statusText} for ${url}`
-      );
+      throw new ApiDownError(url, response.status);
     }
 
     return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof RateLimitError || error instanceof ApiDownError) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new TimeoutError(url, config.timeout);
+    }
+    throw new ApiDownError(url);
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+// ─── CLOB API (Order Book Data) ────────────────────────────
+
+/**
+ * Fetch order book for a market to get REAL bid-ask spread.
+ * This is the accurate spread — not the vigorish estimate from prices.
+ */
+export async function getOrderBook(
+  tokenId: string,
+  config: PolymarketConfig = DEFAULT_CONFIG
+): Promise<{ bestBid: number; bestAsk: number; spread: number } | null> {
+  try {
+    const url = `${config.clobApiUrl}/book?token_id=${tokenId}`;
+    const raw = await fetchJson<ClobBookResponse>(url, config, 'clob');
+
+    const bestBid =
+      raw.bids.length > 0 ? parseFloat(raw.bids[0].price) : 0;
+    const bestAsk =
+      raw.asks.length > 0 ? parseFloat(raw.asks[0].price) : 1;
+    const spread = bestAsk - bestBid;
+
+    return { bestBid, bestAsk, spread };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch mid-price for a market from CLOB.
+ */
+export async function getMidPrice(
+  tokenId: string,
+  config: PolymarketConfig = DEFAULT_CONFIG
+): Promise<number | null> {
+  try {
+    const url = `${config.clobApiUrl}/midpoint?token_id=${tokenId}`;
+    const raw = await fetchJson<{ mid: string }>(url, config, 'clob');
+    return parseFloat(raw.mid);
+  } catch {
+    return null;
   }
 }
 
@@ -139,17 +203,24 @@ export async function searchEvents(
   const encoded = encodeURIComponent(query);
   const url = `${config.gammaApiUrl}/events?title_contains=${encoded}&active=true&closed=false&limit=${config.maxMarkets}&order=volume24hr&ascending=false`;
 
-  const raw = await fetchJson<GammaEventResponse[]>(url, config);
+  const raw = await fetchJson<GammaEventResponse[]>(url, config, 'gamma');
 
-  const events: PolymarketEvent[] = raw.map((e) => ({
-    id: e.id,
-    title: e.title,
-    description: e.description || '',
-    category: e.category || 'unknown',
-    endDate: e.end_date_iso,
-    active: e.active,
-    markets: (e.markets || []).map((m) => parseGammaMarket(m, config)),
-  }));
+  const events: PolymarketEvent[] = [];
+  for (const e of raw) {
+    const markets: PolymarketMarket[] = [];
+    for (const m of e.markets || []) {
+      markets.push(await parseGammaMarket(m, config));
+    }
+    events.push({
+      id: e.id,
+      title: e.title,
+      description: e.description || '',
+      category: e.category || 'unknown',
+      endDate: e.end_date_iso,
+      active: e.active,
+      markets,
+    });
+  }
 
   setCache(cacheKey, events);
   return events;
@@ -172,23 +243,24 @@ export async function searchMarkets(
   const encoded = encodeURIComponent(query);
   const url = `${config.gammaApiUrl}/markets?tag_contains=${encoded}&active=true&closed=false&limit=${config.maxMarkets}&order=volume24hr&ascending=false`;
 
-  const raw = await fetchJson<GammaMarketResponse[]>(url, config);
+  const rawResults = await fetchJson<GammaMarketResponse[]>(url, config, 'gamma');
 
-  const markets = raw.map((m) => parseGammaMarket(m, config));
+  const markets: PolymarketMarket[] = [];
+  for (const m of rawResults) {
+    markets.push(await parseGammaMarket(m, config));
+  }
 
   // Also try searching by question text
   const url2 = `${config.gammaApiUrl}/markets?question_contains=${encoded}&active=true&closed=false&limit=${config.maxMarkets}&order=volume24hr&ascending=false`;
 
   try {
-    const raw2 = await fetchJson<GammaMarketResponse[]>(url2, config);
-    const markets2 = raw2.map((m) => parseGammaMarket(m, config));
+    const raw2 = await fetchJson<GammaMarketResponse[]>(url2, config, 'gamma');
 
-    // Deduplicate by conditionId
     const seen = new Set(markets.map((m) => m.conditionId));
-    for (const m of markets2) {
-      if (!seen.has(m.conditionId)) {
-        markets.push(m);
-        seen.add(m.conditionId);
+    for (const m of raw2) {
+      if (!seen.has(m.condition_id)) {
+        markets.push(await parseGammaMarket(m, config));
+        seen.add(m.condition_id);
       }
     }
   } catch {
@@ -214,62 +286,25 @@ export async function getMarket(
   if (cached) return cached;
 
   const url = `${config.gammaApiUrl}/markets?condition_id=${conditionId}`;
-  const raw = await fetchJson<GammaMarketResponse[]>(url, config);
+  const raw = await fetchJson<GammaMarketResponse[]>(url, config, 'gamma');
 
   if (!raw.length) return null;
 
-  const market = parseGammaMarket(raw[0], config);
+  const market = await parseGammaMarket(raw[0], config);
   setCache(cacheKey, market);
   return market;
 }
 
-// ─── CLOB API (Order Book Data) ────────────────────────────
-
-/**
- * Fetch order book for a market to get real-time spread data.
- */
-export async function getOrderBook(
-  tokenId: string,
-  config: PolymarketConfig = DEFAULT_CONFIG
-): Promise<{ bestBid: number; bestAsk: number; spread: number } | null> {
-  try {
-    const url = `${config.clobApiUrl}/book?token_id=${tokenId}`;
-    const raw = await fetchJson<ClobBookResponse>(url, config);
-
-    const bestBid =
-      raw.bids.length > 0 ? parseFloat(raw.bids[0].price) : 0;
-    const bestAsk =
-      raw.asks.length > 0 ? parseFloat(raw.asks[0].price) : 1;
-    const spread = bestAsk - bestBid;
-
-    return { bestBid, bestAsk, spread };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Fetch mid-price for a market from CLOB.
- */
-export async function getMidPrice(
-  tokenId: string,
-  config: PolymarketConfig = DEFAULT_CONFIG
-): Promise<number | null> {
-  try {
-    const url = `${config.clobApiUrl}/midpoint?token_id=${tokenId}`;
-    const raw = await fetchJson<{ mid: string }>(url, config);
-    return parseFloat(raw.mid);
-  } catch {
-    return null;
-  }
-}
-
 // ─── Helpers ───────────────────────────────────────────────
 
-function parseGammaMarket(
+/**
+ * Parse a Gamma API market response into our type.
+ * Optionally fetches CLOB order book for real bid-ask spread.
+ */
+async function parseGammaMarket(
   m: GammaMarketResponse,
   config: PolymarketConfig
-): PolymarketMarket {
+): Promise<PolymarketMarket> {
   let yesPrice = 0.5;
   let noPrice = 0.5;
 
@@ -282,23 +317,62 @@ function parseGammaMarket(
   }
 
   const oi = m.open_interest || m.liquidity_num || 0;
-  const spread = Math.abs(1 - yesPrice - noPrice);
+
+  // Default: estimate spread from price overround (INACCURATE but free)
+  let bestBid = yesPrice;
+  let bestAsk = yesPrice;
+  let spread = Math.abs(1 - yesPrice - noPrice);
+  let spreadFromClob = false;
+
+  // If configured and token ID available, fetch REAL spread from CLOB
+  if (config.fetchOrderBook) {
+    let tokenId: string | null = null;
+    try {
+      const tokenIds = JSON.parse(m.clobTokenIds || '[]');
+      tokenId = tokenIds[0] || null;
+    } catch {
+      // No token IDs available
+    }
+
+    if (tokenId) {
+      const book = await getOrderBook(tokenId, config);
+      if (book) {
+        bestBid = book.bestBid;
+        bestAsk = book.bestAsk;
+        spread = book.spread;
+        spreadFromClob = true;
+      }
+    }
+  }
 
   return {
     conditionId: m.condition_id,
     question: m.question,
     outcomePriceYes: yesPrice,
     outcomePriceNo: noPrice,
-    volume24h: 0, // Gamma doesn't always return this separately
+    volume24h: 0,
     volumeTotal: m.volume_num || parseFloat(m.volume || '0'),
     openInterest: oi,
-    uniqueTraders: 0, // Requires separate API call
-    bestBid: yesPrice - spread / 2,
-    bestAsk: yesPrice + spread / 2,
+    uniqueTraders: 0,
+    bestBid,
+    bestAsk,
     spread,
-    meetsLiquidityThreshold:
-      oi >= config.minOpenInterest && spread <= config.maxSpread,
+    spreadFromClob,
   };
+}
+
+/**
+ * Check if a market meets liquidity threshold at runtime.
+ * This is a FUNCTION, not a cached boolean — always uses current data.
+ */
+export function meetsLiquidityThreshold(
+  market: PolymarketMarket,
+  config: PolymarketConfig = DEFAULT_CONFIG
+): boolean {
+  return (
+    market.openInterest >= config.minOpenInterest &&
+    market.spread <= config.maxSpread
+  );
 }
 
 /**
