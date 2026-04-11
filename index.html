@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ThoughtProof — Healthcare Prior Auth Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: #1e2d4a;
+    --border-bright: #2d4a7a;
+    --text: #e2e8f0;
+    --text-dim: #8892a8;
+    --text-muted: #4a5568;
+    --accent: #6366f1;
+    --accent-glow: rgba(99,102,241,0.15);
+    --green: #10b981;
+    --green-glow: rgba(16,185,129,0.15);
+    --red: #ef4444;
+    --red-glow: rgba(239,68,68,0.15);
+    --amber: #f59e0b;
+    --amber-glow: rgba(245,158,11,0.15);
+    --cyan: #06b6d4;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 2rem 2rem 1rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(99,102,241,0.05) 0%, transparent 100%);
+  }
+  .header .logo {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+  .header .logo span { color: var(--accent); }
+  .header .subtitle {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+    font-weight: 400;
+  }
+  .header .demo-badge {
+    display: inline-block;
+    margin-top: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    background: var(--accent-glow);
+    border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 100px;
+    font-size: 0.7rem;
+    color: var(--accent);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  /* ── Main Layout ── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  /* ── Scenario Card ── */
+  .scenario {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .scenario-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .scenario-icon {
+    width: 40px; height: 40px;
+    background: var(--red-glow);
+    border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem;
+  }
+  .scenario-header h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .scenario-header .tag {
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    background: var(--red-glow);
+    color: var(--red);
+    font-size: 0.7rem;
+    font-weight: 600;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .claim-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 600px) { .claim-grid { grid-template-columns: 1fr; } }
+
+  .claim-field {
+    padding: 0.85rem 1rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .claim-field .label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.3rem;
+    font-weight: 600;
+  }
+  .claim-field .value {
+    font-size: 0.9rem;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .claim-field .value.mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+  }
+
+  .denial-reason {
+    grid-column: 1 / -1;
+    margin-top: 0.25rem;
+    padding: 1rem;
+    background: var(--red-glow);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 8px;
+  }
+  .denial-reason .label {
+    font-size: 0.65rem;
+    color: var(--red);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.3rem;
+    font-weight: 600;
+  }
+  .denial-reason .value {
+    font-size: 0.85rem;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  /* ── Action Button ── */
+  .action-area {
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+  .verify-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.85rem 2rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 0 30px rgba(99,102,241,0.3);
+  }
+  .verify-btn:hover {
+    background: #5558e6;
+    box-shadow: 0 0 40px rgba(99,102,241,0.4);
+    transform: translateY(-1px);
+  }
+  .verify-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .verify-btn .icon { font-size: 1.1rem; }
+
+  /* ── Pipeline ── */
+  .pipeline {
+    display: none;
+    margin-bottom: 1.5rem;
+  }
+  .pipeline.active { display: block; }
+
+  .step {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem 0;
+    opacity: 0.3;
+    transition: opacity 0.4s;
+  }
+  .step.active { opacity: 1; }
+  .step.done { opacity: 0.7; }
+
+  .step-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 36px;
+  }
+  .step-dot {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    transition: all 0.3s;
+  }
+  .step.active .step-dot {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+    box-shadow: 0 0 15px rgba(99,102,241,0.3);
+  }
+  .step.done .step-dot {
+    border-color: var(--green);
+    background: var(--green-glow);
+    color: var(--green);
+  }
+  .step-line {
+    width: 2px;
+    flex: 1;
+    background: var(--border);
+    margin: 4px 0;
+  }
+  .step.done .step-line { background: var(--green); }
+
+  .step-content {
+    flex: 1;
+    padding-top: 0.35rem;
+  }
+  .step-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .step-desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .step-terminal {
+    margin-top: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--green);
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  .step-terminal .dim { color: var(--text-muted); }
+  .step-terminal .accent { color: var(--accent); }
+  .step-terminal .red { color: var(--red); }
+  .step-terminal .amber { color: var(--amber); }
+  .step-terminal .cyan { color: var(--cyan); }
+
+  /* ── Spinner ── */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(99,102,241,0.3);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+
+  /* ── Result ── */
+  .result {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+  .result.active { display: block; }
+
+  .result-header {
+    padding: 1.25rem 1.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .result-verdict {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .result-verdict.flawed { color: var(--red); }
+  .result-verdict-tag {
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .result-verdict-tag.flawed {
+    background: var(--red-glow);
+    color: var(--red);
+  }
+
+  .result-body { padding: 1.5rem 1.75rem; }
+
+  .finding {
+    padding: 1rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+  }
+  .finding-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--amber);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 0.5rem;
+  }
+  .finding-text {
+    font-size: 0.85rem;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  .attestation {
+    margin-top: 1.25rem;
+    padding: 1rem;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    line-height: 1.8;
+    color: var(--text-dim);
+    overflow-x: auto;
+  }
+  .attestation .key { color: var(--cyan); }
+  .attestation .val { color: var(--text); }
+  .attestation .val.green { color: var(--green); }
+  .attestation .val.red { color: var(--red); }
+
+  /* ── Impact Box ── */
+  .impact {
+    display: none;
+    background: linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(99,102,241,0.08) 100%);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: 12px;
+    padding: 1.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .impact.active { display: block; }
+  .impact h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--green);
+    margin-bottom: 1rem;
+  }
+  .impact-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+  }
+  @media (max-width: 600px) { .impact-grid { grid-template-columns: 1fr; } }
+  .impact-stat {
+    text-align: center;
+    padding: 1rem;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .impact-stat .number {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--green);
+  }
+  .impact-stat .label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 0.25rem;
+  }
+
+  /* ── CTA ── */
+  .cta {
+    display: none;
+    text-align: center;
+    padding: 2rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .cta.active { display: block; }
+  .cta h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .cta p {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+  }
+  .cta a {
+    display: inline-block;
+    padding: 0.7rem 1.75rem;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  .cta a:hover {
+    background: #5558e6;
+    transform: translateY(-1px);
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeIn {
+    from { opacity:0; transform: translateY(8px); }
+    to { opacity:1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeIn 0.4s ease forwards; }
+
+  /* ── Typewriter ── */
+  .typewriter { overflow: hidden; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Thought<span>Proof</span></div>
+  <div class="subtitle">Reasoning Integrity for Autonomous AI Agents</div>
+  <div class="demo-badge">Interactive Demo — Healthcare Prior Authorization</div>
+</div>
+
+<div class="container">
+
+  <!-- Scenario -->
+  <div class="scenario fade-in">
+    <div class="scenario-header">
+      <div class="scenario-icon">🏥</div>
+      <h2>Prior Authorization — AI Denial Review</h2>
+      <div class="tag">Denied by AI</div>
+    </div>
+    <div class="claim-grid">
+      <div class="claim-field">
+        <div class="label">Patient</div>
+        <div class="value">Maria Chen, 58F</div>
+      </div>
+      <div class="claim-field">
+        <div class="label">Claim ID</div>
+        <div class="value mono">CLM-2026-04-0847291</div>
+      </div>
+      <div class="claim-field">
+        <div class="label">Procedure</div>
+        <div class="value">Lumbar MRI with Contrast (CPT 72149)</div>
+      </div>
+      <div class="claim-field">
+        <div class="label">Diagnosis</div>
+        <div class="value">M54.5 — Low back pain, L4-L5 radiculopathy</div>
+      </div>
+      <div class="claim-field">
+        <div class="label">Referring Physician</div>
+        <div class="value">Dr. James Park, Neurology</div>
+      </div>
+      <div class="claim-field">
+        <div class="label">Payer AI System</div>
+        <div class="value mono">ClaimsBot v3.2 (Humana)</div>
+      </div>
+      <div class="denial-reason">
+        <div class="label">AI Denial Reasoning</div>
+        <div class="value">"Conservative treatment not exhausted. Patient has not completed minimum 6 weeks of physical therapy prior to advanced imaging. Denial per clinical guideline UM-2024-IMG-003. Recommend: 6 weeks PT, then re-submit."</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Button -->
+  <div class="action-area">
+    <button class="verify-btn" id="verifyBtn" onclick="startVerification()">
+      <span class="icon">🔍</span>
+      Verify Reasoning with ThoughtProof
+    </button>
+  </div>
+
+  <!-- Pipeline -->
+  <div class="pipeline" id="pipeline">
+    <!-- Step 1 -->
+    <div class="step" id="step1">
+      <div class="step-indicator">
+        <div class="step-dot">1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">Capturing Reasoning Chain</div>
+        <div class="step-desc">Extracting the AI's full decision logic from ClaimsBot v3.2</div>
+        <div class="step-terminal" id="term1" style="display:none"></div>
+      </div>
+    </div>
+    <!-- Step 2 -->
+    <div class="step" id="step2">
+      <div class="step-indicator">
+        <div class="step-dot">2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">Cross-Referencing Clinical Guidelines</div>
+        <div class="step-desc">Checking denial against AMA criteria, CMS rules, and payer-specific policy</div>
+        <div class="step-terminal" id="term2" style="display:none"></div>
+      </div>
+    </div>
+    <!-- Step 3 -->
+    <div class="step" id="step3">
+      <div class="step-indicator">
+        <div class="step-dot">3</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">Evaluating Logical Integrity</div>
+        <div class="step-desc">Testing for reasoning gaps, misapplied criteria, and missing context</div>
+        <div class="step-terminal" id="term3" style="display:none"></div>
+      </div>
+    </div>
+    <!-- Step 4 -->
+    <div class="step" id="step4">
+      <div class="step-indicator">
+        <div class="step-dot">4</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">Signing Attestation</div>
+        <div class="step-desc">Generating cryptographic proof of the reasoning evaluation</div>
+        <div class="step-terminal" id="term4" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div class="result" id="result">
+    <div class="result-header">
+      <span style="font-size:1.3rem">⚠️</span>
+      <span class="result-verdict flawed">REASONING FLAWED</span>
+      <span class="result-verdict-tag flawed">3 Issues Found</span>
+    </div>
+    <div class="result-body">
+      <div class="finding">
+        <div class="finding-title">Finding 1 — Misapplied Guideline</div>
+        <div class="finding-text">
+          AI cited guideline <strong>UM-2024-IMG-003</strong> which requires 6 weeks PT before imaging.
+          However, this guideline contains an <strong>exception for neurological deficits</strong>:
+          <em>"Radiculopathy with motor weakness or progressive neurological symptoms bypasses conservative treatment requirements."</em>
+          Patient chart shows L4-L5 radiculopathy — the exception applies. The AI failed to check exception clauses.
+        </div>
+      </div>
+      <div class="finding">
+        <div class="finding-title">Finding 2 — Missing Patient History</div>
+        <div class="finding-text">
+          The AI's reasoning references "no prior PT." Patient records show <strong>8 weeks of physical therapy</strong>
+          completed at Summit Rehabilitation (Jan 12 – Mar 9, 2026) with documented failure to improve.
+          The AI did not query the treatment history database. The factual premise of the denial is wrong.
+        </div>
+      </div>
+      <div class="finding">
+        <div class="finding-title">Finding 3 — CMS Compliance Gap</div>
+        <div class="finding-text">
+          Under <strong>CMS Final Rule CMS-0057-F (2026)</strong>, denial reasoning must cite the specific clinical
+          evidence reviewed. This denial cites only the guideline number without referencing any patient-specific
+          clinical data. This is a <strong>compliance violation</strong> that exposes the payer to regulatory action.
+        </div>
+      </div>
+
+      <div class="attestation">
+        <span class="key">ThoughtProof Attestation</span><br>
+        ──────────────────────────────────────<br>
+        <span class="key">verdict:</span>        <span class="val red">REASONING_FLAWED</span><br>
+        <span class="key">confidence:</span>     <span class="val">0.96</span><br>
+        <span class="key">issues:</span>         <span class="val">3</span><br>
+        <span class="key">claim_id:</span>       <span class="val">CLM-2026-04-0847291</span><br>
+        <span class="key">agent_id:</span>       <span class="val">claimsbot-v3.2-humana</span><br>
+        <span class="key">eval_time:</span>      <span class="val">1.47s</span><br>
+        <span class="key">reasoning_hash:</span> <span class="val">0x7a3f...b291</span><br>
+        <span class="key">attestation:</span>    <span class="val">0x4d91...8e3c</span><br>
+        <span class="key">signed_by:</span>      <span class="val">thoughtproof.eth</span><br>
+        <span class="key">chain:</span>          <span class="val">Base (ERC-8183)</span><br>
+        <span class="key">arweave_tx:</span>     <span class="val">ar://Kx9m...Qp7w</span><br>
+        ──────────────────────────────────────<br>
+        <span class="key">recommendation:</span> <span class="val red">BLOCK DENIAL — Route to human review</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Impact -->
+  <div class="impact" id="impact">
+    <h3>✅ What ThoughtProof Just Prevented</h3>
+    <div class="impact-grid">
+      <div class="impact-stat">
+        <div class="number">$170</div>
+        <div class="label">Appeal cost avoided</div>
+      </div>
+      <div class="impact-stat">
+        <div class="number">45 days</div>
+        <div class="label">Patient delay prevented</div>
+      </div>
+      <div class="impact-stat">
+        <div class="number">1</div>
+        <div class="label">CMS violation blocked</div>
+      </div>
+    </div>
+    <p style="text-align:center; color:var(--text-dim); font-size:0.8rem; margin-top:1.25rem;">
+      Multiply by <strong style="color:var(--text)">200,000 AI-assisted prior auths/year</strong> per mid-size payer
+      → <strong style="color:var(--green)">$2.1M saved annually</strong>
+    </p>
+  </div>
+
+  <!-- CTA -->
+  <div class="cta" id="cta">
+    <h3>See this with your real denial data</h3>
+    <p>15-minute call. We run your scenarios live. No slides, just proof.</p>
+    <a href="mailto:raul@thoughtproof.xyz?subject=ThoughtProof%20Demo%20Request">Book a Demo →</a>
+  </div>
+
+</div>
+
+<script>
+const terminalContent = {
+  term1: [
+    '<span class="dim">$</span> <span class="accent">POST</span> /v1/verify',
+    '<span class="dim">  agent_id:</span>  claimsbot-v3.2-humana',
+    '<span class="dim">  claim_id:</span>  CLM-2026-04-0847291',
+    '<span class="dim">  action:</span>    DENY',
+    '<span class="dim">  reasoning:</span> "Conservative treatment not exhausted..."',
+    '',
+    '<span class="cyan">→ Reasoning chain captured (847 tokens)</span>',
+    '<span class="cyan">→ Decision tree: 4 nodes, 2 leaf conditions</span>',
+    '<span class="cyan">→ Cited guidelines: UM-2024-IMG-003</span>'
+  ],
+  term2: [
+    '<span class="dim">Checking guidelines...</span>',
+    '',
+    '<span class="dim">[1/3]</span> UM-2024-IMG-003 §4.2 ... <span class="amber">⚠ EXCEPTION CLAUSE FOUND</span>',
+    '<span class="dim">       → "Radiculopathy with motor weakness bypasses</span>',
+    '<span class="dim">          conservative treatment requirements"</span>',
+    '<span class="dim">[2/3]</span> CMS-0057-F §3.1 ............. <span class="red">✗ VIOLATION</span>',
+    '<span class="dim">       → Missing patient-specific clinical evidence</span>',
+    '<span class="dim">[3/3]</span> AMA Prior Auth Reform 2025 .. <span class="green">✓ Format OK</span>',
+  ],
+  term3: [
+    '<span class="dim">Running integrity checks...</span>',
+    '',
+    '<span class="red">✗ LOGIC ERROR:</span>  Guideline exception not evaluated',
+    '<span class="dim">  → M54.5 + radiculopathy triggers §4.2 exception</span>',
+    '<span class="dim">  → AI skipped exception clause evaluation entirely</span>',
+    '',
+    '<span class="red">✗ FACT ERROR:</span>   Patient history not queried',
+    '<span class="dim">  → 8 weeks PT completed (Summit Rehab, Jan-Mar 2026)</span>',
+    '<span class="dim">  → AI stated "no prior PT" — factually incorrect</span>',
+    '',
+    '<span class="red">✗ COMPLIANCE:</span>  CMS citation requirements unmet',
+    '',
+    '<span class="amber">Confidence: 0.96 — REASONING FLAWED</span>'
+  ],
+  term4: [
+    '<span class="dim">Generating attestation...</span>',
+    '',
+    '<span class="dim">reasoning_hash:</span>  <span class="val">0x7a3f8c...b291</span>',
+    '<span class="dim">signing with:</span>    <span class="val">thoughtproof.eth</span>',
+    '<span class="dim">chain:</span>           <span class="val">Base (ERC-8183)</span>',
+    '',
+    '<span class="green">✓ Attestation signed: 0x4d91...8e3c</span>',
+    '<span class="green">✓ Archived: ar://Kx9m...Qp7w</span>',
+    '<span class="green">✓ Envelope delivered (1.47s total)</span>'
+  ]
+};
+
+async function typeLines(termId, lines) {
+  const el = document.getElementById(termId);
+  el.style.display = 'block';
+  el.innerHTML = '';
+
+  for (const line of lines) {
+    const div = document.createElement('div');
+    el.appendChild(div);
+    // Render full line with HTML
+    div.innerHTML = line;
+    el.scrollTop = el.scrollHeight;
+    await sleep(120 + Math.random() * 180);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function activateStep(n) {
+  const step = document.getElementById('step' + n);
+  step.classList.add('active');
+  step.classList.remove('done');
+  step.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function completeStep(n) {
+  const step = document.getElementById('step' + n);
+  step.classList.remove('active');
+  step.classList.add('done');
+  const dot = step.querySelector('.step-dot');
+  dot.innerHTML = '✓';
+}
+
+async function startVerification() {
+  const btn = document.getElementById('verifyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Verifying...';
+
+  const pipeline = document.getElementById('pipeline');
+  pipeline.classList.add('active');
+
+  // Step 1
+  await activateStep(1);
+  await sleep(400);
+  await typeLines('term1', terminalContent.term1);
+  await sleep(300);
+  await completeStep(1);
+
+  // Step 2
+  await activateStep(2);
+  await sleep(400);
+  await typeLines('term2', terminalContent.term2);
+  await sleep(300);
+  await completeStep(2);
+
+  // Step 3
+  await activateStep(3);
+  await sleep(400);
+  await typeLines('term3', terminalContent.term3);
+  await sleep(300);
+  await completeStep(3);
+
+  // Step 4
+  await activateStep(4);
+  await sleep(400);
+  await typeLines('term4', terminalContent.term4);
+  await sleep(500);
+  await completeStep(4);
+
+  await sleep(600);
+
+  // Show result
+  const result = document.getElementById('result');
+  result.classList.add('active');
+  result.classList.add('fade-in');
+  result.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  await sleep(800);
+
+  // Show impact
+  const impact = document.getElementById('impact');
+  impact.classList.add('active');
+  impact.classList.add('fade-in');
+
+  await sleep(600);
+
+  // Show CTA
+  const cta = document.getElementById('cta');
+  cta.classList.add('active');
+  cta.classList.add('fade-in');
+  cta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  btn.innerHTML = '<span class="icon">✓</span> Verification Complete';
+}
+</script>
+
+</body>
+</html>
