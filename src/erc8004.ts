@@ -92,7 +92,12 @@ export interface ERC8004Evidence {
       false_consensus: boolean;
     };
     synthesis?: string;
-    dissent?: Array<{ position: string; weight: number }>;
+    dissent?: {
+      minority_positions: { model: string; family: string; position: string; reason: string }[];
+      minority_count: number;
+      consensus_reached: boolean;
+      [key: string]: any;
+    };
     flags: string[];
   };
   /** Pipeline details */

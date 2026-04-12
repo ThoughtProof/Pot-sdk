@@ -293,6 +293,20 @@ export interface VerificationResult {
   /** v2.0: Wall-clock verification time in milliseconds. Always present. */
   durationMs: number;
 
+  // ── Patent Alignment Fields (v2.1) ─────────────────────────────────────
+  /**
+   * v2.1: Model Family MDI — Herfindahl-Hirschman Index measuring diversity
+   * of AI model families in the pipeline. Patent Claim 4.
+   * MDI = 1 - Σ(share_i²). Range: 0.0 (homogeneous) to 1.0 (maximally diverse).
+   * Always present for Standard tier. null for Lite tier.
+   */
+  model_family_mdi?: number | null;
+  /**
+   * v2.1: Unique model families that participated in the verification pipeline.
+   * E.g. ['anthropic', 'deepseek', 'google', 'xai']. Patent Claim 1(b).
+   */
+  model_families_used?: string[];
+
   // ── Legacy / Extended Fields ───────────────────────────────────────────
   /** @deprecated Use `verdict === 'ALLOW'` instead. Kept for backward compatibility. */
   verified: boolean;
@@ -303,7 +317,17 @@ export interface VerificationResult {
   sas?: number;
   dpr?: DPRResult;
   biasMap?: Record<string, number>;
-  dissent?: any;
+  /**
+   * v2.1: Structured dissent with minority positions.
+   * Patent Claim 1(e): "explicit dissent representing minority positions
+   * that did not reach consensus."
+   */
+  dissent?: {
+    minority_positions: { model: string; family: string; position: string; reason: string }[];
+    minority_count: number;
+    consensus_reached: boolean;
+    [key: string]: any; // Allow legacy dual-synthesis fields
+  };
   synthesis?: string;
   classifiedObjections?: ClassifiedObjection[];
   outputFormat?: OutputFormat;

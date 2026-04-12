@@ -15,7 +15,7 @@ import { runCritic } from './pipeline/critic.js';
 import { runSynthesizer, computeSynthesisBalance } from './pipeline/synthesizer.js';
 import { computeDPR } from './metrics/dpr.js';
 import { createProvider, createProviderFromConfig, assignRoles } from './providers/index.js';
-import { parseConfidence, computeMdi } from './utils.js';
+import { parseConfidence, computeMdi, computeModelFamilyMDI, extractModelFamilies, extractMinorityPositions } from './utils.js';
 import { scanForAdversarialPatterns } from './security.js';
 import { runSandboxCheck } from './sandbox.js';
 import { calibrateConfidence } from './calibration.js';
@@ -846,6 +846,13 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const balance = computeSynthesisBalance(genProposals, synthesis.content);
   const mdiValue = computeMdi(genProposals);
   const statedConfidence = parseConfidence(synthesis.content);
+
+  // Patent Claim 4: Model Family MDI (Herfindahl-Hirschman Index)
+  const allPipelineModels = [...generatorModelNames, criticModel, synthModel];
+  const modelFamilyMDI = computeModelFamilyMDI(allPipelineModels);
+
+  // Patent Claim 1(e): Model families used in pipeline
+  const modelFamiliesUsed = extractModelFamilies(generatorModelNames, criticModel, synthModel);
   const dpr = computeDPR(critique.content, synthesis.content, balance.warning);
 
   // Reasoning-based aggregation
@@ -1018,6 +1025,17 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   );
   if (cousinWarning.detected) flags.push('cousin-bias-risk');
 
+  // ── Patent Claim 1(e): Minority positions (explicit dissent) ─────────────
+  const minorityPositions = extractMinorityPositions(genProposals, finalVerdict, synthesis.content);
+
+  // Merge minority positions into dissent structure
+  const structuredDissent = {
+    ...(typeof dissent === 'object' && dissent !== null ? dissent : {}),
+    minority_positions: minorityPositions,
+    minority_count: minorityPositions.length,
+    consensus_reached: minorityPositions.length === 0,
+  };
+
   // ── Build result ──────────────────────────────────────────────────────────
   const result = {
     // v2.0 public fields (always present, invariants enforced)
@@ -1031,6 +1049,10 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     tier: standardExecutedTier,
     durationMs,
 
+    // Patent alignment fields (v2.1)
+    model_family_mdi: modelFamilyMDI,
+    model_families_used: modelFamiliesUsed,
+
     // Legacy / extended fields
     verified: finalVerdict === 'ALLOW',
     flags,
@@ -1038,7 +1060,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     sas: balance.score,
     dpr,
     biasMap,
-    dissent,
+    dissent: structuredDissent,
     synthesis: synthesis.content,
     pipeline: {
       mode,
