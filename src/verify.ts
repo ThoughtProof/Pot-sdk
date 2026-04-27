@@ -32,27 +32,37 @@ import { compositionalSynthesize } from './pipeline/compositor.js';
 import type { SubVerdict } from './pipeline/compositor.js';
 import { detectStake } from './stake.js';
 
-// ── Map internal 4-tier → public 3-tier ───────────────────────────────────────
+// ── Map internal verdict → public 3-tier ─────────────────────────────────────
+//
+// Canonical verdict model: see ThoughtProof/pot-cli docs/adr/0001-verdict-model.md
+//
+//   ALLOW     → ALLOW
+//   HOLD      → UNCERTAIN  (epistemic: insufficient evidence, needs review)
+//   DISSENT   → UNCERTAIN  (epistemic: evaluators do not converge)
+//   UNCERTAIN → UNCERTAIN
+//
+// Safety-critical consumers SHOULD treat UNCERTAIN-with-metadata
+// (review_needed, dissent) as BLOCK in their policy layer.
 
 function mapVerdict(internal: InternalVerdict): Verdict {
   if (internal === 'ALLOW') return 'ALLOW';
-  if (internal === 'UNCERTAIN') return 'UNCERTAIN';
-  return 'BLOCK'; // HOLD or DISSENT
+  // HOLD, DISSENT, and UNCERTAIN all surface as public UNCERTAIN per ADR-0001.
+  // Distinguishing metadata is carried on PipelineResult.flags / dissent fields.
+  return 'UNCERTAIN';
 }
 
 /**
- * Compute severity_score for BLOCK verdicts.
- *   DISSENT (material defect / false consensus) → high severity: ~0.70–1.00
- *   HOLD (moderate concerns, high conf + flags) → moderate severity: ~0.30–0.65
- * Returns null for ALLOW / UNCERTAIN.
+ * Compute severity_score.
+ *
+ * Per ADR-0001, HOLD and DISSENT both map to public UNCERTAIN (an epistemic
+ * state, not a severity-graded BLOCK). severity_score is therefore null for
+ * all current internal verdicts. This is the v3.0.0 breaking change relative
+ * to v2.x where HOLD returned 0.30–0.65 and DISSENT returned 0.70–1.0.
+ *
+ * Reserved for future use: severity_score may be populated again when the
+ * engine emits an explicit hard-BLOCK internal verdict.
  */
-function computeSeverityScore(internal: InternalVerdict, confidence: number): number | null {
-  if (internal === 'DISSENT') {
-    return parseFloat(Math.min(1.0, 0.70 + confidence * 0.30).toFixed(3));
-  }
-  if (internal === 'HOLD') {
-    return parseFloat(Math.min(0.65, Math.max(0.30, 0.30 + confidence * 0.35)).toFixed(3));
-  }
+function computeSeverityScore(_internal: InternalVerdict, _confidence: number): number | null {
   return null;
 }
 
