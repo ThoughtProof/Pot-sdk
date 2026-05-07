@@ -13,14 +13,18 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 };
 
-const DEFAULT_MODELS: Record<string, string> = {
+export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   'anthropic': 'claude-sonnet-4-6',
   'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
-  'moonshot': 'kimi-k2-turbo-preview',
+  'moonshot': 'kimi-k2.6',
   'google': 'gemini-3.1-flash-lite-preview',
   'gemini': 'gemini-3.1-flash-lite-preview',
 };
+
+export function resolveDefaultModel(providerName: string): string | undefined {
+  return DEFAULT_PROVIDER_MODELS[providerName.toLowerCase()];
+}
 
 export function detectBaseUrl(providerName: string, model: string): string {
   const nameLower = providerName.toLowerCase();

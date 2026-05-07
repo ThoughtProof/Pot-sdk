@@ -29,7 +29,7 @@ export class OpenAIProvider extends BaseProvider {
     );
 
     const message = response.choices[0].message;
-    // Reasoning models (kimi-k2-thinking*) put output in reasoning_content, content may be empty
+    // Some reasoning models put output in reasoning_content; content may be empty.
     const content = message.content || message.reasoning_content || '';
     const tokens = response.usage?.total_tokens || 0;
     const cost = this.estimateCost(tokens, model);
