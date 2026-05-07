@@ -53,20 +53,21 @@ export async function runSandboxCheck(
     return { ran: false, codeBlocksFound: 0, flags: [], attestations: [] };
   }
 
-  // Load pot-sandbox — supports both CJS (createRequire) and ESM dynamic import
-  // Graceful fallback if not installed.
+  // Load pot-sandbox as a truly optional runtime dependency.
+  // Keep the package name out of static import() so declaration builds do not
+  // require pot-sandbox to be installed just to type-check pot-sdk.
   let execute: ((code: string, opts?: { timeoutMs?: number }) => Promise<any>) | null = null;
   try {
-    // Try ESM dynamic import first
-    const mod = await import('pot-sandbox').catch(async () => {
-      // Fallback: CJS require via createRequire
-      const { createRequire } = await import('module');
-      const req = createRequire(import.meta.url);
-      return req('pot-sandbox');
-    });
-    execute = mod.execute;
+    const { createRequire } = await import('module');
+    const req = createRequire(__filename);
+    const mod = req('pot-sandbox') as { execute?: (code: string, opts?: { timeoutMs?: number }) => Promise<any> };
+    execute = mod.execute ?? null;
   } catch {
     // pot-sandbox not installed — skip silently
+    return { ran: false, codeBlocksFound: codeBlocks.length, flags: [], attestations: [] };
+  }
+
+  if (!execute) {
     return { ran: false, codeBlocksFound: codeBlocks.length, flags: [], attestations: [] };
   }
 

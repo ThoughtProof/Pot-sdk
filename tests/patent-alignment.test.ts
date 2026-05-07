@@ -55,7 +55,7 @@ describe('Patent Alignment — Model Family Resolution', () => {
   });
 
   it('resolves Moonshot models', () => {
-    expect(resolveModelFamily('kimi-k2-turbo-preview')).toBe('moonshot');
+    expect(resolveModelFamily('kimi-k2.6')).toBe('moonshot');
   });
 
   it('returns unknown for unrecognized models', () => {
