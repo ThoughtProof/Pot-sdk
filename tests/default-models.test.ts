@@ -6,7 +6,7 @@ import { resolveDefaultModel } from '../src/providers/index.js';
 describe('default model configuration', () => {
   it('uses Gemini Flash as the default fourth generator instead of Moonshot/Kimi', () => {
     expect(DEFAULT_GEN_NAMES).toEqual(['anthropic', 'xai', 'deepseek', 'gemini']);
-    expect(DEFAULT_MODELS.gemini).toBe('gemini-3.1-flash-lite-preview');
+    expect(DEFAULT_MODELS.gemini).toBe('gemini-3.1-flash-lite');
     expect(DEFAULT_GEN_NAMES).not.toContain('moonshot');
   });
 

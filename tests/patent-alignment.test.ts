@@ -47,7 +47,7 @@ describe('Patent Alignment — Model Family Resolution', () => {
   });
 
   it('resolves Google models', () => {
-    expect(resolveModelFamily('gemini-3.1-flash-lite-preview')).toBe('google');
+    expect(resolveModelFamily('gemini-3.1-flash-lite')).toBe('google');
   });
 
   it('resolves DeepSeek models', () => {
@@ -66,7 +66,7 @@ describe('Patent Alignment — Model Family Resolution', () => {
 describe('Patent Alignment — Model Families Extraction', () => {
   it('extracts unique families from pipeline', () => {
     const families = extractModelFamilies(
-      ['grok-4-1-fast-non-reasoning', 'deepseek-chat', 'gemini-3.1-flash-lite-preview'],
+      ['grok-4-1-fast-non-reasoning', 'deepseek-chat', 'gemini-3.1-flash-lite'],
       'claude-sonnet-4-6',
       'claude-sonnet-4-6',
     );

@@ -18,8 +18,8 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
   'moonshot': 'kimi-k2.6',
-  'google': 'gemini-3.1-flash-lite-preview',
-  'gemini': 'gemini-3.1-flash-lite-preview',
+  'google': 'gemini-3.1-flash-lite',
+  'gemini': 'gemini-3.1-flash-lite',
 };
 
 export function resolveDefaultModel(providerName: string): string | undefined {

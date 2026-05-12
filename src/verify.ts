@@ -350,7 +350,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   'anthropic': 'claude-sonnet-4-6',
   'xai': 'grok-4-1-fast-non-reasoning',
   'deepseek': 'deepseek-chat',
-  'gemini': 'gemini-3.1-flash-lite-preview',
+  'gemini': 'gemini-3.1-flash-lite',
   'moonshot': 'kimi-k2.6',
 };
 
