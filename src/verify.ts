@@ -345,12 +345,13 @@ function detectCousinBias(
 
 // ── Provider setup ────────────────────────────────────────────────────────────
 
-export const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'deepseek', 'gemini'] as const;
+export const DEFAULT_GEN_NAMES = ['anthropic', 'xai', 'serv-ultra', 'gemini'] as const;
 export const DEFAULT_MODELS: Record<string, string> = {
   'anthropic': 'claude-sonnet-4-6',
   'xai': 'grok-4-1-fast-non-reasoning',
-  'deepseek': 'deepseek-chat',
+  'serv-ultra': 'serv-ultra',
   'gemini': 'gemini-3.1-flash-lite',
+  'deepseek': 'deepseek-chat',
   'moonshot': 'kimi-k2.6',
 };
 

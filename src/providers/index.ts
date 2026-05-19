@@ -1,6 +1,6 @@
 import type { GeneratorConfig, ProviderConfig, Provider } from '../types.js';
 import { AnthropicProvider } from './anthropic.js';
-import { OpenAIProvider, XAIProvider, MoonshotProvider, DeepSeekProvider } from './openai.js';
+import { OpenAIProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, ServProvider } from './openai.js';
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
   'xai': 'https://api.x.ai/v1/chat/completions',
@@ -11,6 +11,12 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   'openai': 'https://api.openai.com/v1/chat/completions',
   'google': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
   'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+  'serv': 'https://inference-api.openserv.ai/v1/chat/completions',
+  'serv-nano': 'https://inference-api.openserv.ai/v1/chat/completions',
+  'serv-mini': 'https://inference-api.openserv.ai/v1/chat/completions',
+  'serv-standard': 'https://inference-api.openserv.ai/v1/chat/completions',
+  'serv-pro': 'https://inference-api.openserv.ai/v1/chat/completions',
+  'serv-ultra': 'https://inference-api.openserv.ai/v1/chat/completions',
 };
 
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
@@ -20,6 +26,12 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   'moonshot': 'kimi-k2.6',
   'google': 'gemini-3.1-flash-lite',
   'gemini': 'gemini-3.1-flash-lite',
+  'serv': 'serv-ultra',
+  'serv-nano': 'serv-nano',
+  'serv-mini': 'serv-mini',
+  'serv-standard': 'serv-standard',
+  'serv-pro': 'serv-pro',
+  'serv-ultra': 'serv-ultra',
 };
 
 export function resolveDefaultModel(providerName: string): string | undefined {
@@ -48,6 +60,12 @@ export function createProvider(config: GeneratorConfig): Provider {
     return new AnthropicProvider(config.apiKey, config.name);
   }
 
+  const nameLower = config.name.toLowerCase();
+  if (nameLower === 'serv' || nameLower.startsWith('serv-')) {
+    const baseUrl = config.baseUrl || DEFAULT_BASE_URLS['serv'];
+    return new ServProvider(config.apiKey, baseUrl);
+  }
+
   const baseUrl = config.baseUrl || detectBaseUrl(config.name, config.model);
   return new OpenAIProvider(config.apiKey, baseUrl, config.name);
 }
@@ -64,6 +82,11 @@ export function createProviderFromConfig(config: ProviderConfig): Provider {
 
   if (isAnthropic) {
     return new AnthropicProvider(config.apiKey, config.name);
+  }
+
+  if (nameLower === 'serv' || nameLower.startsWith('serv-')) {
+    const baseUrl = config.baseUrl || DEFAULT_BASE_URLS['serv'];
+    return new ServProvider(config.apiKey, baseUrl);
   }
 
   const baseUrl = config.baseUrl || detectBaseUrl(config.name, config.model);
@@ -114,4 +137,4 @@ export function assignRoles(providers: ProviderConfig[]): {
   return { generators, critic, synthesizer };
 }
 
-export { AnthropicProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, OpenAIProvider };
+export { AnthropicProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, ServProvider, OpenAIProvider };

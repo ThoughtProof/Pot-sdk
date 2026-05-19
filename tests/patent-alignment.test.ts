@@ -58,6 +58,15 @@ describe('Patent Alignment — Model Family Resolution', () => {
     expect(resolveModelFamily('kimi-k2.6')).toBe('moonshot');
   });
 
+  it('resolves OpenServ SERV models', () => {
+    expect(resolveModelFamily('serv-nano')).toBe('openserv');
+    expect(resolveModelFamily('serv-ultra')).toBe('openserv');
+    expect(resolveModelFamily('serv-pro')).toBe('openserv');
+    expect(resolveModelFamily('serv-mini')).toBe('openserv');
+    expect(resolveModelFamily('serv-standard')).toBe('openserv');
+    expect(resolveModelFamily('serv-swift')).toBe('openserv');
+  });
+
   it('returns unknown for unrecognized models', () => {
     expect(resolveModelFamily('totally-new-model')).toBe('unknown');
   });
@@ -66,11 +75,11 @@ describe('Patent Alignment — Model Family Resolution', () => {
 describe('Patent Alignment — Model Families Extraction', () => {
   it('extracts unique families from pipeline', () => {
     const families = extractModelFamilies(
-      ['grok-4-1-fast-non-reasoning', 'deepseek-chat', 'gemini-3.1-flash-lite'],
+      ['grok-4-1-fast-non-reasoning', 'serv-ultra', 'gemini-3.1-flash-lite'],
       'claude-sonnet-4-6',
       'claude-sonnet-4-6',
     );
-    expect(families).toEqual(['anthropic', 'deepseek', 'google', 'xai']);
+    expect(families).toEqual(['anthropic', 'google', 'openserv', 'xai']);
   });
 
   it('deduplicates when same family appears in multiple roles', () => {

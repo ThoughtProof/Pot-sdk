@@ -74,6 +74,8 @@ export function resolveModelFamily(modelName: string): string {
   if (m.includes('deepseek')) return 'deepseek';
   if (m.includes('llama') || m.includes('meta')) return 'meta';
   if (m.includes('kimi') || m.includes('moonshot')) return 'moonshot';
+  if (m.includes('serv') && !m.includes('openserv')) return 'openserv';
+  if (m.includes('openserv')) return 'openserv';
   if (m.includes('qwen') || m.includes('alibaba')) return 'alibaba';
   if (m.includes('mistral')) return 'mistral';
   if (m.includes('command') || m.includes('cohere')) return 'cohere';
