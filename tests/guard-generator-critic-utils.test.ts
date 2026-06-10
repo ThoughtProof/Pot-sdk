@@ -127,16 +127,22 @@ describe('computeMdi', () => {
     expect(computeMdi(proposals)).toBe(1);
   });
 
-  it('treats punctuation-heavy but semantically similar text as maximally diverse under the current tokenizer', () => {
+  it('detects partial overlap in punctuation-heavy but semantically similar text', () => {
     const proposals = [
       proposal('a', 'compliance-framework auditing,controls governance evidence'),
       proposal('b', 'compliance framework controls governance reporting traceability'),
       proposal('c', 'biological dentistry implants occlusion enamel titanium healing'),
     ];
 
-    // extractKeywords currently keeps punctuation inside tokens, so
-    // superficially similar punctuated words may not overlap and yield max diversity.
-    expect(computeMdi(proposals)).toBe(1);
+    // extractKeywords strips punctuation (hyphens/commas removed, tokens merge:
+    // 'compliance-framework' → 'complianceframework'), so a and b share
+    // 'controls'/'governance' but not the merged token → high-but-not-max
+    // diversity. (A ≤1.4.2 regex bug deleted SPACES instead, collapsing every
+    // text to one token and pinning mdi at exactly 1.0 — this test used to
+    // codify that bug as "max diversity".)
+    const mdi = computeMdi(proposals);
+    expect(mdi).toBeGreaterThan(0.9);
+    expect(mdi).toBeLessThan(1);
   });
 });
 

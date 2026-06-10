@@ -79,10 +79,15 @@ CRITIQUE:
 {critique}`;
 
 export function extractKeywords(text: string): string[] {
+  // NOTE: these are regex LITERALS — \s, not \\s. The double-backslash version
+  // shipped in ≤1.4.2 made the char-class keep backslash+s and DELETE SPACES,
+  // collapsing every text into one giant "word" → Jaccard 0 between any two
+  // texts → mdi pinned at 1.0 for all runs and synthesis-balance comparing
+  // single-token sets. Found via instrumented run 2026-06-10.
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\\s]/g, '')
-    .split(/\\s+/)
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
     .filter(w => w.length > 4);
 }
 
