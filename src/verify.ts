@@ -621,8 +621,18 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   let dissent: any = undefined;
 
   if (gensProviders.length >= 2) {
+    // Dual synthesis: first generator + the ASSIGNED synthesizer.
+    // (Pre-1.4.2 this used gensProviders[0]+[1], which silently dropped the
+    // assigned synthesizer — with 3 providers the third model was never called
+    // and modelCount over-reported the panel. Fix: use the real synthesizer;
+    // fall back to gensProviders[1] only if it would duplicate synth1.)
     const synth1 = gensProviders[0];
-    const synth2 = gensProviders[1];
+    const synthIsDuplicate =
+      (synthProvider === synth1.provider && synthModel === synth1.model) ||
+      (synthProvider.name === synth1.provider.name && synthModel === synth1.model);
+    const synth2 = synthIsDuplicate
+      ? gensProviders[1]
+      : { provider: synthProvider, model: synthModel };
     const { primary, verification } = await runDualSynthesizer(
       synth1.provider, synth1.model,
       synth2.provider, synth2.model,

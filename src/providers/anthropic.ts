@@ -10,7 +10,7 @@ export class AnthropicProvider extends BaseProvider {
     this.name = providerName || 'Anthropic';
   }
 
-  async call(model: string, prompt: string): Promise<APIResponse> {
+  async call(model: string, prompt: string, maxTokens: number = 8192): Promise<APIResponse> {
     if (!this.apiKey) {
       throw new Error('Anthropic API key not configured');
     }
@@ -19,7 +19,7 @@ export class AnthropicProvider extends BaseProvider {
       this.baseUrl,
       {
         model,
-        max_tokens: 8192,
+        max_tokens: maxTokens,
         messages: [{ role: 'user', content: prompt }],
       },
       {

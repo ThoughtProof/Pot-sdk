@@ -188,7 +188,9 @@ export async function runSynthesizer(
     .replace('{proposals}', proposalsText)
     .replace('{critique}', critique.content);
 
-  const response = await provider.call(model, prompt);
+  // Latency budget: synthesis needs the verdict + key reasoning, not an essay.
+  // 1536 output tokens are ample for a structured synthesis with confidence line.
+  const response = await provider.call(model, prompt, 1536);
 
   return {
     model: model.split('/').pop() || model,

@@ -55,14 +55,19 @@ export async function runSandboxCheck(
 
   // Load pot-sandbox — supports both CJS (createRequire) and ESM dynamic import
   // Graceful fallback if not installed.
+  // Specifier is held in a variable so the TS DTS build does not attempt to
+  // resolve types for this OPTIONAL peer dependency (it may be absent at build
+  // time; it is loaded purely at runtime with a catch fallback).
+  const sandboxPkg = 'pot-sandbox';
   let execute: ((code: string, opts?: { timeoutMs?: number }) => Promise<any>) | null = null;
   try {
-    // Try ESM dynamic import first
-    const mod = await import('pot-sandbox').catch(async () => {
+    // Try ESM dynamic import first.
+    // @ts-ignore — optional peer dependency, may be absent at build time.
+    const mod: any = await import(sandboxPkg).catch(async () => {
       // Fallback: CJS require via createRequire
       const { createRequire } = await import('module');
       const req = createRequire(import.meta.url);
-      return req('pot-sandbox');
+      return req(sandboxPkg);
     });
     execute = mod.execute;
   } catch {

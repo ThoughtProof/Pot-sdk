@@ -239,7 +239,10 @@ export function reconstructFromFeatures(features: ExtractedFeature[]): string {
  * @returns ExtractionResult with structured features
  */
 export async function runExtractor(
-  provider: { call: (model: string, prompt: string, systemPrompt?: string) => Promise<{ content: string }> },
+  // NOTE (1.4.2): third call() arg is now an output-token budget; the system
+  // prompt previously passed there was silently ignored by every provider.
+  // It is now inlined into the prompt so the instructions actually apply.
+  provider: { call: (model: string, prompt: string, maxTokens?: number) => Promise<{ content: string }> },
   model: string,
   rawContent: string,
   adversarialScan?: (text: string) => { detected: boolean; patterns: string[] },
@@ -247,8 +250,8 @@ export async function runExtractor(
   const start = Date.now();
 
   try {
-    const prompt = EXTRACTOR_USER_TEMPLATE.replace('{INPUT}', rawContent);
-    const result = await provider.call(model, prompt, EXTRACTOR_SYSTEM_PROMPT);
+    const prompt = EXTRACTOR_SYSTEM_PROMPT + '\n\n' + EXTRACTOR_USER_TEMPLATE.replace('{INPUT}', rawContent);
+    const result = await provider.call(model, prompt);
     const response = result.content;
     const latencyMs = Date.now() - start;
 

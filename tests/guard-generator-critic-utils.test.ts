@@ -203,23 +203,24 @@ describe('runGenerator / runGenerators', () => {
     expect(results[1]).toMatchObject({ model: 'claude', representationType: 'structured', content: 'Response B' });
   });
 
-  it('returns error placeholders for failed generators and throws only if all fail', async () => {
+  it('throws when fewer than the minimum generators succeed (fail-loud, not silent)', async () => {
     const okProvider = makeProvider(async () => ({ content: 'usable result' }));
     const badProvider = makeProvider(async () => {
       throw new Error('rate limited');
     });
 
-    const mixed = await runGenerators(
-      [
-        { provider: okProvider, model: 'good/model' },
-        { provider: badProvider, model: 'bad/model' },
-      ],
-      'Question',
-    );
-
-    expect(mixed[0].content).toBe('usable result');
-    expect(mixed[1].content).toContain('[ERROR]');
-    expect(mixed[1].content).toContain('rate limited');
+    // 1 of 2 succeeds → below the minimum (2). runGenerators must throw rather
+    // than silently proceed with a single generator (which would collapse the
+    // adversarial panel into a self-critic). Fail loud, not silent.
+    await expect(
+      runGenerators(
+        [
+          { provider: okProvider, model: 'good/model' },
+          { provider: badProvider, model: 'bad/model' },
+        ],
+        'Question',
+      ),
+    ).rejects.toThrow(/Not enough generators succeeded/);
 
     await expect(
       runGenerators(
@@ -229,7 +230,7 @@ describe('runGenerator / runGenerators', () => {
         ],
         'Question',
       ),
-    ).rejects.toThrow('All generators failed');
+    ).rejects.toThrow(/Not enough generators succeeded|All generators failed/);
   });
 });
 

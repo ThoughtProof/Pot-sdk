@@ -51,15 +51,22 @@ export interface GuardResult {
  * Accepts pot-sdk's Provider interface (call-based).
  */
 export async function runGuard(
-  provider: { call: (model: string, prompt: string, systemPrompt?: string) => Promise<{ content: string }> },
+  // NOTE (1.4.2): the third call() arg is an output-token budget. Earlier code
+  // passed GUARD_SYSTEM_PROMPT here — real providers only ever took 2 params,
+  // so that string was silently ignored (guard never ran with a system prompt).
+  // Removed to keep behavior identical while making types honest.
+  provider: { call: (model: string, prompt: string, maxTokens?: number) => Promise<{ content: string }> },
   model: string,
   input: string,
 ): Promise<GuardResult> {
   const start = Date.now();
 
   try {
-    const prompt = GUARD_USER_TEMPLATE.replace('{INPUT}', input);
-    const result = await provider.call(model, prompt, GUARD_SYSTEM_PROMPT);
+    // Embed the guard instructions directly in the prompt. (Pre-1.4.2 the
+    // system prompt was passed as a third call() arg that no provider read —
+    // it was silently dropped. Inlining it actually delivers the instructions.)
+    const prompt = GUARD_SYSTEM_PROMPT + '\n\n' + GUARD_USER_TEMPLATE.replace('{INPUT}', input);
+    const result = await provider.call(model, prompt);
     const response = result.content;
 
     const latencyMs = Date.now() - start;

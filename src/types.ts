@@ -314,7 +314,8 @@ export interface APIResponse {
 
 export interface Provider {
   name: string;
-  call(model: string, prompt: string): Promise<APIResponse>;
+  /** maxTokens: optional output budget (default 8192). Used to cap verbose roles (critic/synthesizer) for latency. */
+  call(model: string, prompt: string, maxTokens?: number): Promise<APIResponse>;
   isAvailable(): boolean;
 }
 

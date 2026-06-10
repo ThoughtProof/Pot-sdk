@@ -1,6 +1,8 @@
 import type { GeneratorConfig, ProviderConfig, Provider } from '../types.js';
 import { AnthropicProvider } from './anthropic.js';
-import { OpenAIProvider, XAIProvider, MoonshotProvider, DeepSeekProvider } from './openai.js';
+import { OpenAIProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, ServProvider } from './openai.js';
+
+const SERV_BASE_URL = 'https://inference-api.openserv.ai/v1/chat/completions';
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
   'xai': 'https://api.x.ai/v1/chat/completions',
@@ -9,7 +11,20 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   'kimi': 'https://api.moonshot.ai/v1/chat/completions',
   'deepseek': 'https://api.deepseek.com/chat/completions',
   'openai': 'https://api.openai.com/v1/chat/completions',
+  'serv': SERV_BASE_URL,
+  'openserv': SERV_BASE_URL,
 };
+
+/**
+ * True when this provider/model targets OpenServ SERV — which needs the
+ * dedicated ServProvider (max_completion_tokens). Matches by provider name
+ * ('serv'/'openserv') or by 'serv-' model prefix (serv-nano, serv-standard…).
+ */
+export function isServTarget(providerName: string, model: string): boolean {
+  const n = providerName.toLowerCase();
+  const m = model.toLowerCase();
+  return n === 'serv' || n === 'openserv' || m.startsWith('serv-');
+}
 
 const DEFAULT_MODELS: Record<string, string> = {
   'anthropic': 'claude-sonnet-4-6',
@@ -40,6 +55,11 @@ export function createProvider(config: GeneratorConfig): Provider {
     return new AnthropicProvider(config.apiKey, config.name);
   }
 
+  // SERV needs the dedicated provider (max_completion_tokens, not max_tokens).
+  if (isServTarget(config.name, config.model)) {
+    return new ServProvider(config.apiKey);
+  }
+
   const baseUrl = config.baseUrl || detectBaseUrl(config.name, config.model);
   return new OpenAIProvider(config.apiKey, baseUrl, config.name);
 }
@@ -56,6 +76,11 @@ export function createProviderFromConfig(config: ProviderConfig): Provider {
 
   if (isAnthropic) {
     return new AnthropicProvider(config.apiKey, config.name);
+  }
+
+  // SERV needs the dedicated provider (max_completion_tokens, not max_tokens).
+  if (isServTarget(config.name, config.model)) {
+    return new ServProvider(config.apiKey);
   }
 
   const baseUrl = config.baseUrl || detectBaseUrl(config.name, config.model);
@@ -106,4 +131,4 @@ export function assignRoles(providers: ProviderConfig[]): {
   return { generators, critic, synthesizer };
 }
 
-export { AnthropicProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, OpenAIProvider };
+export { AnthropicProvider, XAIProvider, MoonshotProvider, DeepSeekProvider, ServProvider, OpenAIProvider };
