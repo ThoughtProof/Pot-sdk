@@ -1,4 +1,4 @@
-import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, CalibrationCriticResult } from '../types.js';
+import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, CalibrationCriticResult, APIResponse } from '../types.js';
 
 // ── Adversarial Mode: "Find every flaw" ────────────────────────────────────
 const CRITIC_PROMPT_DE = `Du bist ein brutaler Red-Team Analyst und Fakten-Checker. Deine Aufgabe: Finde ALLE Schwächen in diesen Proposals.
@@ -399,7 +399,50 @@ OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restat
   const CRITIC_TEMPERATURE = 0;
 
   try {
-    response = await provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
+    if (options?.classifyMateriality) {
+      // ── Self-consistency sampling (median-of-3) ────────────────────────────
+      // The materiality labels gate the verdict via a step function (a single
+      // 'material' triggers the hasMaterialDefect hard cap). Even at
+      // temperature=0 the label assignment on borderline objections flips
+      // between samples (measured live 2026-06-12: materialCount 0–2 on
+      // identical input → ALLOW/UNCERTAIN/BLOCK lottery). One sample is a
+      // coin flip; the median of three is stable. Samples run in PARALLEL, so
+      // wall latency ≈ one critic call; marginal cost ~2 extra critic calls
+      // (~$0.005), negligible next to the generator panel.
+      // The full critique whose materialCount is the median flows downstream
+      // unchanged — synthesis/objection parsing still see exactly ONE critique.
+      const CRITIC_SAMPLES = 3;
+      const samples = await Promise.allSettled(
+        Array.from({ length: CRITIC_SAMPLES }, () =>
+          provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE)
+        )
+      );
+      const ok = samples
+        .filter((s): s is PromiseFulfilledResult<APIResponse> => s.status === 'fulfilled')
+        .map(s => s.value);
+      if (ok.length === 0) {
+        const firstErr = samples.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined;
+        throw new Error(String(firstErr?.reason ?? 'all critic samples failed'));
+      }
+      // Median by materialCount (tie-break: lower notableCount → the less
+      // alarmist of equally-material critiques; deterministic ordering).
+      const scored = ok
+        .map(r => {
+          const m = parseMaterialityClassifications(r.content);
+          return { r, material: m.materialCount, notable: m.notableCount };
+        })
+        .sort((a, b) => a.material - b.material || a.notable - b.notable);
+      const median = scored[Math.floor(scored.length / 2)];
+      if (scored.length > 1 && scored[0].material !== scored[scored.length - 1].material) {
+        console.warn(
+          `[pot-sdk] Critic self-consistency: materialCount spread ` +
+          `[${scored.map(s => s.material).join(',')}] → median ${median.material} selected`
+        );
+      }
+      response = median.r;
+    } else {
+      response = await provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
+    }
   } catch (primaryError: unknown) {
     const primaryMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
     console.warn(`[pot-sdk] Critic failed — model: ${model}, provider: ${provider.name}, error: ${primaryMsg}`);
