@@ -314,8 +314,10 @@ export interface APIResponse {
 
 export interface Provider {
   name: string;
-  /** maxTokens: optional output budget (default 8192). Used to cap verbose roles (critic/synthesizer) for latency. */
-  call(model: string, prompt: string, maxTokens?: number): Promise<APIResponse>;
+  /** maxTokens: optional output budget (default 8192). Used to cap verbose roles (critic/synthesizer) for latency.
+   *  temperature: optional sampling temperature override. Used by judgment roles
+   *  (critic) for label stability; generators omit it to keep proposal diversity. */
+  call(model: string, prompt: string, maxTokens?: number, temperature?: number): Promise<APIResponse>;
   isAvailable(): boolean;
 }
 

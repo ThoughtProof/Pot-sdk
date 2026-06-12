@@ -9,7 +9,7 @@ export abstract class BaseProvider implements Provider {
     this.apiKey = apiKey;
   }
 
-  abstract call(model: string, prompt: string): Promise<APIResponse>;
+  abstract call(model: string, prompt: string, maxTokens?: number, temperature?: number): Promise<APIResponse>;
 
   isAvailable(): boolean {
     return !!this.apiKey;

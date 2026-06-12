@@ -390,8 +390,16 @@ OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restat
   // ~60s essays; 3072 keeps the block intact at lower latency.
   const CRITIC_MAX_TOKENS = 3072;
 
+  // Judgment determinism: the critic's materiality labels (material/notable/minor)
+  // gate the verdict via a step function (1 material = hard cap + UNVERIFIED).
+  // At default sampling temperature the SAME borderline decision flips labels
+  // run-to-run (measured live 2026-06-12: ALLOW 0.72 vs BLOCK on identical input).
+  // temperature 0 for the critic only — generators keep default temperature
+  // for proposal diversity, which is where sampling variance is WANTED.
+  const CRITIC_TEMPERATURE = 0;
+
   try {
-    response = await provider.call(model, prompt, CRITIC_MAX_TOKENS);
+    response = await provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
   } catch (primaryError: unknown) {
     const primaryMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
     console.warn(`[pot-sdk] Critic failed — model: ${model}, provider: ${provider.name}, error: ${primaryMsg}`);
@@ -407,7 +415,7 @@ OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restat
           `[pot-sdk] Critic fallback — trying: ${fallback.model} ` +
           `(⚠️ author-verifier separation compromised: generator model used as critic)`
         );
-        response = await fallback.provider.call(fallback.model, prompt, CRITIC_MAX_TOKENS);
+        response = await fallback.provider.call(fallback.model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
         usedModel = fallback.model;
         fallbackSucceeded = true;
         break;

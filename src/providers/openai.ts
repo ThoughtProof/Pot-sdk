@@ -11,10 +11,15 @@ export class OpenAIProvider extends BaseProvider {
     this.baseUrl = baseUrl || 'https://api.openai.com/v1/chat/completions';
   }
 
-  async call(model: string, prompt: string, maxTokens: number = 8192): Promise<APIResponse> {
+  async call(model: string, prompt: string, maxTokens: number = 8192, temperature?: number): Promise<APIResponse> {
     if (!this.apiKey) {
       throw new Error(`${this.name} API key not configured`);
     }
+
+    // Moonshot/Kimi rejects any temperature except exactly 1 (HTTP 400) —
+    // never forward an override there. All other OpenAI-compatible backends
+    // (xAI, DeepSeek, OpenAI) accept explicit temperature.
+    const supportsTemperature = this.name !== 'Moonshot';
 
     const response = await this.makeRequest(
       this.baseUrl,
@@ -22,6 +27,7 @@ export class OpenAIProvider extends BaseProvider {
         model,
         messages: [{ role: 'user', content: prompt }],
         max_tokens: maxTokens,
+        ...(temperature !== undefined && supportsTemperature ? { temperature } : {}),
       },
       {
         'Authorization': `Bearer ${this.apiKey}`,
@@ -77,7 +83,7 @@ export class ServProvider extends OpenAIProvider {
     super(apiKey, 'https://inference-api.openserv.ai/v1/chat/completions', 'SERV');
   }
 
-  async call(model: string, prompt: string, maxTokens: number = 8192): Promise<APIResponse> {
+  async call(model: string, prompt: string, maxTokens: number = 8192, _temperature?: number): Promise<APIResponse> {
     if (!this.apiKey) {
       throw new Error(`${this.name} API key not configured`);
     }
@@ -93,6 +99,12 @@ export class ServProvider extends OpenAIProvider {
           { role: 'user', content: prompt },
         ],
         max_completion_tokens: maxTokens, // SERV requires this, NOT max_tokens
+        // NOTE: temperature override deliberately NOT forwarded. SERV is an
+        // o1-style API (max_completion_tokens) and such backends commonly
+        // reject explicit temperature with HTTP 400. The critic-determinism
+        // fix matters for the PRIMARY critic (Sonnet in prod); breaking the
+        // SERV fallback path to gain it would be a bad trade. Revisit only
+        // after live-verifying SERV accepts the parameter.
       },
       {
         'Authorization': `Bearer ${this.apiKey}`,
