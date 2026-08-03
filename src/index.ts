@@ -88,7 +88,7 @@ export {
   validateExtractedClaims,
 } from './pipeline/extractor.js';
 
-export { aggregateFromReasoning } from './pipeline/aggregator.js';
+export { aggregateFromReasoning, applyAggregatedConfidence, DEFLATION_DAMPENING } from './pipeline/aggregator.js';
 export type { AggregationResult, AggregationSignal } from './pipeline/aggregator.js';
 
 export { diversifyInput } from './pipeline/diversifier.js';

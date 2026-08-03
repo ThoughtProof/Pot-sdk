@@ -42,6 +42,12 @@ export interface AggregationResult {
   divergenceAmount: number;
   /** Whether the aggregated value should override the stated value */
   shouldOverride: boolean;
+  /**
+   * v2.1: When true, the override is an upward correction (deflation detected).
+   * Consumer should apply dampening: final = stated + 0.6 * (aggregated - stated)
+   * rather than full replacement.
+   */
+  deflationOverride: boolean;
 }
 
 // ── Signal 1: Proposal Agreement ───────────────────────────────────────────
@@ -278,11 +284,26 @@ export function aggregateFromReasoning(
   const divergenceAmount = Math.abs(statedConfidence - aggregatedConfidence);
   const divergesFromStated = divergenceAmount > DIVERGENCE_THRESHOLD;
 
-  // Override when:
-  // 1. Large divergence AND
-  // 2. Stated confidence is HIGHER than aggregated (inflation, not deflation)
-  // We don't override if stated is lower than aggregated (conservative is fine)
-  const shouldOverride = divergesFromStated && statedConfidence > aggregatedConfidence;
+  // v2.1: Asymmetric bidirectional override.
+  //
+  // DOWNWARD (inflation detection): threshold 0.20, full override.
+  //   stated > aggregated by >0.20 → aggregated value takes over.
+  //   Well-tested, catches synthesizer inflation / prompt injection.
+  //
+  // UPWARD (deflation detection): threshold 0.30, dampened override.
+  //   stated < aggregated by >0.30 → partial correction.
+  //   Higher threshold because aggregator signals are crude heuristics
+  //   (Jaccard, hedging words) and the synthesizer may have detected
+  //   subtle issues the heuristics missed. Dampening factor 0.6 means
+  //   final = stated + 0.6 * (aggregated - stated), not full replacement.
+  //
+  // This fixes the confidence-collapse bug without over-correcting:
+  // synthesizer's conservative caps would emit 25-37% for factual claims,
+  // and the old aggregator never corrected upward.
+  const UPWARD_THRESHOLD = 0.30;
+  const isInflated = statedConfidence > aggregatedConfidence && divergenceAmount > DIVERGENCE_THRESHOLD;
+  const isDeflated = aggregatedConfidence > statedConfidence && divergenceAmount > UPWARD_THRESHOLD;
+  const shouldOverride = isInflated || isDeflated;
 
   return {
     aggregatedConfidence,
@@ -290,5 +311,31 @@ export function aggregateFromReasoning(
     divergesFromStated,
     divergenceAmount: parseFloat(divergenceAmount.toFixed(3)),
     shouldOverride,
+    deflationOverride: isDeflated && !isInflated,
   };
+}
+
+/** Default dampening for upward (deflation) corrections — see aggregateFromReasoning. */
+export const DEFLATION_DAMPENING = 0.6;
+
+/**
+ * Apply aggregator override policy to a synthesizer-stated confidence.
+ * - Inflation (downward): full replace with aggregatedConfidence
+ * - Deflation (upward): stated + dampening * (aggregated - stated)
+ * - No override: stated unchanged
+ */
+export function applyAggregatedConfidence(
+  statedConfidence: number,
+  aggregation: Pick<AggregationResult, 'shouldOverride' | 'deflationOverride' | 'aggregatedConfidence'>,
+  dampening: number = DEFLATION_DAMPENING,
+): number {
+  if (!aggregation.shouldOverride) {
+    return statedConfidence;
+  }
+  if (aggregation.deflationOverride) {
+    return parseFloat(
+      (statedConfidence + dampening * (aggregation.aggregatedConfidence - statedConfidence)).toFixed(3),
+    );
+  }
+  return aggregation.aggregatedConfidence;
 }

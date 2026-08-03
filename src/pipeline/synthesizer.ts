@@ -18,9 +18,7 @@ REGELN:
 
 CONFIDENCE-BEWERTUNG (PFLICHT):
 - Schreibe am Ende "Confidence: X%"
-- Maximum 85% — kein Multi-Modell-System kann Wahrheit garantieren
-- Bei subjektiven/strategischen Fragen: Maximum 70%
-- Bei Fragen wo alle Modelle übereinstimmen aber der Critic Shared Bias fand: Maximum 60%
+{confidenceCaps}
 - Hoher Dissens zwischen Proposals = NIEDRIGERE Confidence, nicht gemittelt
 
 DISSENS-ABSCHNITT (PFLICHT):
@@ -57,9 +55,7 @@ RULES:
 
 CONFIDENCE SCORING (MANDATORY):
 - State "Confidence: X%" at the end
-- Cap confidence at 85% maximum — no multi-model system can guarantee truth
-- For subjective/strategic questions: cap at 70%
-- For questions where all models agree but the critic found shared bias: cap at 60%
+{confidenceCaps}
 - High disagreement between proposals = LOWER confidence, not averaged confidence
 
 DISAGREEMENT SECTION (MANDATORY):
@@ -84,6 +80,39 @@ export function extractKeywords(text: string): string[] {
     .replace(/[^a-z0-9\\s]/g, '')
     .split(/\\s+/)
     .filter(w => w.length > 4);
+}
+
+// ── Confidence cap templates ────────────────────────────────────────────────
+
+const CONFIDENCE_CAPS_EPISTEMIC_DE = `- Maximum 85% — kein Multi-Modell-System kann Wahrheit garantieren
+- Bei subjektiven/strategischen Fragen: Maximum 70%
+- Bei Fragen wo alle Modelle übereinstimmen aber der Critic Shared Bias fand: Maximum 60%`;
+
+const CONFIDENCE_CAPS_EPISTEMIC_EN = `- Cap confidence at 85% maximum — no multi-model system can guarantee truth
+- For subjective/strategic questions: cap at 70%
+- For questions where all models agree but the critic found shared bias: cap at 60%`;
+
+const CONFIDENCE_CAPS_VERIFICATION_DE = `- Maximum 95% — selbst bei klaren Fakten bleibt eine Restunschärfe
+- Bei faktenbasierten Claims mit klarer Evidenz: 80-95% ist korrekt
+- Bei subjektiven Bewertungen oder Meinungen: Maximum 75%
+- Bei Fragen wo alle Modelle übereinstimmen aber der Critic Shared Bias fand: Maximum 65%
+- WICHTIG: Wenn alle Proposals den Claim klar stützen und der Critic keine materiellen Einwände hat, ist eine Confidence von 80%+ angemessen`;
+
+const CONFIDENCE_CAPS_VERIFICATION_EN = `- Cap confidence at 95% maximum — even clear facts retain marginal uncertainty
+- For fact-based claims with clear evidence: 80-95% is appropriate
+- For subjective assessments or opinions: cap at 75%
+- For questions where all models agree but the critic found shared bias: cap at 65%
+- IMPORTANT: When all proposals clearly support the claim and the critic raised no material objections, confidence of 80%+ is warranted`;
+
+/** Resolve synthesizer confidence-cap instructions (testable without LLM calls). */
+export function resolveConfidenceCaps(
+  language: 'de' | 'en' = 'en',
+  verificationMode?: boolean,
+): string {
+  if (verificationMode) {
+    return language === 'de' ? CONFIDENCE_CAPS_VERIFICATION_DE : CONFIDENCE_CAPS_VERIFICATION_EN;
+  }
+  return language === 'de' ? CONFIDENCE_CAPS_EPISTEMIC_DE : CONFIDENCE_CAPS_EPISTEMIC_EN;
 }
 
 export interface SynthesisBalanceDetail {
@@ -158,7 +187,9 @@ export async function runSynthesizer(
   language: 'de' | 'en' = 'de',
   dryRun: boolean = false,
   contextText?: string,
-  receptiveMode?: 'open' | 'defensive' | 'adaptive'
+  receptiveMode?: 'open' | 'defensive' | 'adaptive',
+  /** When true, uses verification-mode confidence caps (higher ceilings for factual claims) */
+  verificationMode?: boolean,
 ): Promise<Synthesis> {
   if (dryRun) {
     return {
@@ -171,7 +202,9 @@ export async function runSynthesizer(
     .map((p, i) => `\\n=== PROPOSAL ${i + 1} (${p.model}) ===\\n${p.content}`)
     .join('\\n\\n');
 
-  const template = language === 'de' ? SYNTHESIZER_PROMPT_DE : SYNTHESIZER_PROMPT_EN;
+  const rawTemplate = language === 'de' ? SYNTHESIZER_PROMPT_DE : SYNTHESIZER_PROMPT_EN;
+  const confidenceCaps = resolveConfidenceCaps(language, verificationMode);
+  const template = rawTemplate.replace('{confidenceCaps}', confidenceCaps);
   const contextSection = contextText || '';
 
   let receptionPrefix = '';

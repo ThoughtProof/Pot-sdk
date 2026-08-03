@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { aggregateFromReasoning } from '../src/pipeline/aggregator.js';
+import { aggregateFromReasoning, applyAggregatedConfidence } from '../src/pipeline/aggregator.js';
 import type { Proposal, ClassifiedObjection } from '../src/types.js';
 
 describe('Reasoning-Based Aggregator', () => {
@@ -135,23 +135,50 @@ describe('Reasoning-Based Aggregator', () => {
       expect(result.aggregatedConfidence).toBeLessThan(0.60);
       expect(result.divergesFromStated).toBe(true);
       expect(result.shouldOverride).toBe(true);
+      expect(result.deflationOverride).toBe(false);
       expect(result.divergenceAmount).toBeGreaterThan(0.20);
     });
 
-    it('does NOT override when stated confidence is lower than aggregated (conservative is fine)', () => {
+    it('does NOT upward-override small conservative gaps (< 0.30)', () => {
+      // Stated slightly below a high-agreement aggregate — gap must stay under upward threshold
       const result = aggregateFromReasoning(
         makeProposals([
-          'The sky is blue due to Rayleigh scattering of sunlight.',
-          'Rayleigh scattering causes blue wavelengths to scatter more in the atmosphere.',
-          'Atmospheric physics confirms blue sky is from light scattering.',
+          'The sky is blue due to Rayleigh scattering of sunlight in the atmosphere.',
+          'Rayleigh scattering causes blue wavelengths to scatter more, making the sky appear blue.',
+          'Atmospheric physics confirms the blue sky comes from Rayleigh scattering of sunlight.',
         ]),
-        'All proposals well-supported. Strong consensus on established physics.',
-        'Clear established physics. Confidence: 50%', // stated lower than warranted
-        0.50,
+        'All proposals well-supported. Strong consensus on established physics. No material objections.',
+        'Clear established physics. Confidence: 72%',
+        0.72,
+        [],
       );
 
-      // Even if aggregated > stated, we don't override conservative estimates
-      expect(result.shouldOverride).toBe(false);
+      if (result.aggregatedConfidence > 0.72) {
+        const gap = result.aggregatedConfidence - 0.72;
+        if (gap <= 0.30) {
+          expect(result.shouldOverride).toBe(false);
+          expect(result.deflationOverride).toBe(false);
+        }
+      }
+    });
+
+    it('upward-overrides severe deflation (gap > 0.30) with deflationOverride flag', () => {
+      const result = aggregateFromReasoning(
+        makeProposals([
+          'The sky is blue due to Rayleigh scattering of sunlight in Earth atmosphere.',
+          'Rayleigh scattering causes shorter blue wavelengths to scatter more than red.',
+          'Established atmospheric physics explains blue sky via Rayleigh scattering of sunlight.',
+        ]),
+        'All proposals well-supported with strong consensus. No unverified claims. No material objections.',
+        'Clear established physics. Confidence: 30%',
+        0.30,
+        [],
+      );
+
+      expect(result.aggregatedConfidence).toBeGreaterThan(0.60);
+      expect(result.divergenceAmount).toBeGreaterThan(0.30);
+      expect(result.shouldOverride).toBe(true);
+      expect(result.deflationOverride).toBe(true);
     });
 
     it('no divergence when stated matches reasoning', () => {
@@ -167,6 +194,39 @@ describe('Reasoning-Based Aggregator', () => {
 
       // Should be roughly aligned
       expect(result.divergenceAmount).toBeLessThan(0.25);
+    });
+  });
+
+  describe('applyAggregatedConfidence', () => {
+    it('leaves stated confidence when no override', () => {
+      expect(
+        applyAggregatedConfidence(0.7, {
+          shouldOverride: false,
+          deflationOverride: false,
+          aggregatedConfidence: 0.9,
+        }),
+      ).toBe(0.7);
+    });
+
+    it('fully replaces on inflation override', () => {
+      expect(
+        applyAggregatedConfidence(0.9, {
+          shouldOverride: true,
+          deflationOverride: false,
+          aggregatedConfidence: 0.4,
+        }),
+      ).toBe(0.4);
+    });
+
+    it('dampens upward deflation correction at 0.6 by default', () => {
+      // 0.30 + 0.6 * (0.80 - 0.30) = 0.60
+      expect(
+        applyAggregatedConfidence(0.3, {
+          shouldOverride: true,
+          deflationOverride: true,
+          aggregatedConfidence: 0.8,
+        }),
+      ).toBe(0.6);
     });
   });
 

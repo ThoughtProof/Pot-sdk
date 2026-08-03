@@ -23,7 +23,7 @@ import { runGuard } from './pipeline/guard.js';
 import type { GuardResult } from './pipeline/guard.js';
 import { runExtractor, extractFeaturesStatic, reconstructFromFeatures } from './pipeline/extractor.js';
 import type { ExtractionResult } from './pipeline/extractor.js';
-import { aggregateFromReasoning } from './pipeline/aggregator.js';
+import { aggregateFromReasoning, applyAggregatedConfidence } from './pipeline/aggregator.js';
 import type { AggregationResult } from './pipeline/aggregator.js';
 import { diversifyInput } from './pipeline/diversifier.js';
 import type { DiversifiedInput } from './pipeline/diversifier.js';
@@ -116,7 +116,8 @@ async function runDualSynthesizer(
   provider1: ReturnType<typeof createProvider>, model1: string,
   provider2: ReturnType<typeof createProvider>, model2: string,
   proposals: Proposal[], critique: { model: string; content: string }, lang: 'en' | 'de',
-  receptiveMode?: 'open' | 'defensive' | 'adaptive'
+  receptiveMode?: 'open' | 'defensive' | 'adaptive',
+  verificationMode?: boolean,
 ): Promise<{ primary: Synthesis; verification: { similarity_score: number; diverged: boolean; synth_coverage?: number } }> {
   if (provider1 === provider2 && model1 === model2) {
     throw new Error('Dual synthesizer requires distinct provider+model pairs');
@@ -125,8 +126,8 @@ async function runDualSynthesizer(
   const SIMILARITY_DIVERGENCE_THRESHOLD = 0.6;
 
   const synthCalls = [
-    runSynthesizer(provider1, model1, proposals, critique, lang, false, undefined, receptiveMode),
-    runSynthesizer(provider2, model2, proposals, critique, lang, false, undefined, receptiveMode),
+    runSynthesizer(provider1, model1, proposals, critique, lang, false, undefined, receptiveMode, verificationMode),
+    runSynthesizer(provider2, model2, proposals, critique, lang, false, undefined, receptiveMode, verificationMode),
   ];
 
   const results = await Promise.allSettled(synthCalls);
@@ -840,7 +841,8 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       synth1.provider, synth1.model,
       synth2.provider, synth2.model,
       proposals, critiqueForSynthesis, lang,
-      effectiveReceptiveMode
+      effectiveReceptiveMode,
+      true, // verify() always runs in verification mode
     );
     synthesis = primary;
     dissent = verification;
@@ -851,6 +853,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     };
     synthesis = await runSynthesizer(
       synthProvider, synthModel, proposals, critiqueForSynthesis, lang, false, undefined, effectiveReceptiveMode,
+      true, // verify() always runs in verification mode
     );
   }
 
@@ -876,9 +879,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     classifyObjections ? parseClassifiedObjections(critique.content) : undefined,
   );
 
-  const confidence = aggregation.shouldOverride
-    ? aggregation.aggregatedConfidence
-    : statedConfidence;
+  const confidence = applyAggregatedConfidence(statedConfidence, aggregation);
 
   const flags: VerificationFlag[] = [];
 
@@ -1088,6 +1089,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       aggregatedConfidence: aggregation.aggregatedConfidence,
       divergence: aggregation.divergenceAmount,
       overridden: aggregation.shouldOverride,
+      deflationOverride: aggregation.deflationOverride,
       signals: aggregation.signals.map(s => ({ name: s.name, value: s.value, weight: s.weight, reason: s.reason })),
     },
     ...(sandboxResult ? { sandbox: sandboxResult } : {}),
