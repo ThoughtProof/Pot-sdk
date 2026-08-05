@@ -21,6 +21,15 @@ export interface AttestationOptions {
   requestId?: string;
   /** Whether this is a self-issued (unaudited) credential. Default: true */
   unaudited?: boolean;
+  /**
+   * WP5: Parent attestation or content hash for receipt chaining.
+   * Prefer options.parentHash; falls back to result.parent_hash.
+   */
+  parentHash?: string;
+  /**
+   * WP5: Falsifiability criteria. Prefer options; falls back to result.falsifiability.
+   */
+  falsifiability?: string | string[];
 }
 
 /**
@@ -76,6 +85,12 @@ export function createAttestation(
       claim_preview: claimPreview,
       type: options.type || 'text',
       request_id: options.requestId || `req_${randomUUID()}`,
+      ...((options.parentHash || result.parent_hash)
+        ? { parent_hash: options.parentHash || result.parent_hash }
+        : {}),
+      ...((options.falsifiability !== undefined || result.falsifiability !== undefined)
+        ? { falsifiability: options.falsifiability ?? result.falsifiability }
+        : {}),
     },
 
     result: {

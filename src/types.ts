@@ -169,6 +169,10 @@ export interface TPVerificationCredential {
     claim_preview: string;
     type: string;
     request_id: string;
+    /** Optional chain to prior attestation/content hash (WP5) */
+    parent_hash?: string;
+    /** Optional falsifiability criteria (WP5) */
+    falsifiability?: string | string[];
   };
 
   result: {
@@ -306,6 +310,18 @@ export interface VerificationResult {
    * E.g. ['anthropic', 'deepseek', 'google', 'xai']. Patent Claim 1(b).
    */
   model_families_used?: string[];
+  /**
+   * WP5: Falsifiability criteria when provided by caller.
+   */
+  falsifiability?: string | string[];
+  /**
+   * WP5: Parent hash for receipt chaining when provided by caller.
+   */
+  parent_hash?: string;
+  /** WP5: true when strictModelDiversity forced a non-ALLOW path */
+  strictModelDiversityApplied?: boolean;
+  /** WP5: threshold used when strict policy fired */
+  minModelFamilyMdi?: number;
 
   // ── Legacy / Extended Fields ───────────────────────────────────────────
   /** @deprecated Use `verdict === 'ALLOW'` instead. Kept for backward compatibility. */
@@ -398,7 +414,7 @@ export interface APIResponse {
 
 export interface Provider {
   name: string;
-  call(model: string, prompt: string): Promise<APIResponse>;
+  call(model: string, prompt: string, maxTokens?: number, temperature?: number): Promise<APIResponse>;
   isAvailable(): boolean;
 }
 

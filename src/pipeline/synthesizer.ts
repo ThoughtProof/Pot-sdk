@@ -75,10 +75,12 @@ CRITIQUE:
 {critique}`;
 
 export function extractKeywords(text: string): string[] {
+  // NOTE: regex LITERALS use \s (one backslash in source). Double-backslash
+  // versions deleted spaces and pinned computeMdi at 1.0 (LTS fix 49700c1).
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\\s]/g, '')
-    .split(/\\s+/)
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
     .filter(w => w.length > 4);
 }
 

@@ -11,17 +11,22 @@ export class OpenAIProvider extends BaseProvider {
     this.baseUrl = baseUrl || 'https://api.openai.com/v1/chat/completions';
   }
 
-  async call(model: string, prompt: string): Promise<APIResponse> {
+  async call(model: string, prompt: string, maxTokens: number = 8192, temperature?: number): Promise<APIResponse> {
     if (!this.apiKey) {
       throw new Error(`${this.name} API key not configured`);
     }
+
+    // Moonshot/Kimi rejects any temperature except exactly 1 (HTTP 400) —
+    // never forward an override there.
+    const supportsTemperature = this.name !== 'Moonshot';
 
     const response = await this.makeRequest(
       this.baseUrl,
       {
         model,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 8192,
+        max_tokens: maxTokens,
+        ...(temperature !== undefined && supportsTemperature ? { temperature } : {}),
       },
       {
         'Authorization': `Bearer ${this.apiKey}`,
@@ -69,10 +74,11 @@ export class ServProvider extends OpenAIProvider {
     super(
       apiKey,
       baseUrl || 'https://inference-api.openserv.ai/v1/chat/completions',
+      'SERV',
     );
   }
 
-  async call(model: string, prompt: string): Promise<APIResponse> {
+  async call(model: string, prompt: string, maxTokens: number = 8192, _temperature?: number): Promise<APIResponse> {
     if (!this.apiKey) {
       throw new Error(`${this.name} API key not configured`);
     }
@@ -80,6 +86,7 @@ export class ServProvider extends OpenAIProvider {
     // SERV models require:
     //  1. max_completion_tokens (not max_tokens)
     //  2. A system/developer message in the messages array (400 error without it)
+    // Temperature override not forwarded — SERV sampling defaults.
     const response = await this.makeRequest(
       this.baseUrl,
       {
@@ -88,7 +95,7 @@ export class ServProvider extends OpenAIProvider {
           { role: 'system', content: 'You are an expert analyst. Follow the instructions precisely.' },
           { role: 'user', content: prompt },
         ],
-        max_completion_tokens: 8192,
+        max_completion_tokens: maxTokens,
       },
       {
         'Authorization': `Bearer ${this.apiKey}`,

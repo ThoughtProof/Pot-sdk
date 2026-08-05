@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — freeze-library (feat/freeze-library-lts-wp5)
+
+**Scope:** trunk only (`master` line). Does **not** change `release/1.4.1-serv` / npm `1.4.5` / `thoughtproof-api` pin.
+
+### LTS ports
+- Fix `extractKeywords` regex (`\s`) — content MDI was pinned at 1.0 (from LTS `49700c1`)
+- Critic: `temperature=0`, maxTokens 3072, median-of-3 self-consistency when `classifyMateriality` (from LTS `3486038`/`c9327aa`)
+- Provider `call(model, prompt, maxTokens?, temperature?)` — backward compatible optional args
+
+### WP5 (opt-in / optional metadata — default path unchanged)
+- `strictModelDiversity` + `minModelFamilyMdi` (default 0.4): forces ALLOW→UNCERTAIN when family MDI too low
+- `falsifiability` + `parentHash` on verify params → result + attestation subject
+
+### Tests
+- 279 passed including `tests/freeze-library-wp5.test.ts`
+
 ## v3.0.0-rc.1 — 2026-04-27
 
 **Breaking:** Public verdict mapping fix per [ADR-0001 in pot-cli](https://github.com/ThoughtProof/pot-cli/blob/main/docs/adr/0001-verdict-model.md).

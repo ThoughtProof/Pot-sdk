@@ -301,6 +301,28 @@ interface VerifyParams {
    * Used to guard against infinite recursion across recursive verify() calls.
    */
   _recursionDepth?: number;
+  /**
+   * Freeze-library WP5 (opt-in): hard Model-Family-MDI policy.
+   * When true and model_family_mdi is below `minModelFamilyMdi` (default 0.4),
+   * verdict is forced to UNCERTAIN and flag `strict-low-model-diversity` is set.
+   * Default false — production-safe; soft `low-model-diversity` flag remains.
+   */
+  strictModelDiversity?: boolean;
+  /**
+   * Minimum model-family MDI when strictModelDiversity is enabled.
+   * Patent Claim 5 typical threshold ~0.4. Default 0.4.
+   */
+  minModelFamilyMdi?: number;
+  /**
+   * Freeze-library WP5 (optional): falsifiability criteria for the claim
+   * ("what would prove this wrong?"). Echoed on the result; used by attestation.
+   */
+  falsifiability?: string | string[];
+  /**
+   * Freeze-library WP5 (optional): parent attestation/content hash to chain
+   * receipts (mini DAG). Echoed on the result; stored on TP-VC when attesting.
+   */
+  parentHash?: string;
 }
 
 // ── Failure cost thresholds ──────────────────────────────────────────────────
@@ -895,6 +917,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   if (balance.warning && gensProviders.length >= 3) flags.push('synthesis-dominance');
   if (dpr.false_consensus) flags.push('false-consensus');
   if (mdiValue < 0.3) flags.push('low-model-diversity');
+  if (modelFamilyMDI < 0.3) flags.push('low-model-family-diversity');
   if (confidence < 0.5) flags.push('low-confidence');
 
   // Disagreement detection
@@ -1016,7 +1039,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     flags.push('domain-mismatch-escalation');
   }
 
-  const finalVerdict: Verdict = domainMismatchUncertain ? 'UNCERTAIN' : verdict;
+  let finalVerdict: Verdict = domainMismatchUncertain ? 'UNCERTAIN' : verdict;
   const finalSeverityScore: number | null = domainMismatchUncertain ? null : severity_score;
 
   const durationMs = Date.now() - startTime;
@@ -1037,6 +1060,23 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     Array.isArray(params.providers) ? params.providers as ProviderConfig[] : undefined,
   );
   if (cousinWarning.detected) flags.push('cousin-bias-risk');
+
+  // ── WP5 opt-in: strict model-family MDI (does not change default path) ──
+  const strictMdi = params.strictModelDiversity === true;
+  const minFamilyMdi = params.minModelFamilyMdi ?? 0.4;
+  let strictDiversityTriggered = false;
+  if (strictMdi && modelFamilyMDI < minFamilyMdi) {
+    strictDiversityTriggered = true;
+    flags.push('strict-low-model-diversity');
+    // Force epistemic hold — do not invent BLOCK; UNCERTAIN is the safe public surface
+    if (finalVerdict === 'ALLOW') {
+      finalVerdict = 'UNCERTAIN';
+    }
+  }
+
+  // WP5 optional metadata (echo only — no behavior change)
+  const falsifiability = params.falsifiability;
+  const parentHash = params.parentHash;
 
   // ── Patent Claim 1(e): Minority positions (explicit dissent) ─────────────
   const minorityPositions = extractMinorityPositions(genProposals, finalVerdict, synthesis.content);
@@ -1105,6 +1145,9 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     ...(toxicCorrected ? { toxicCorrected } : {}),
     ...(calibrativeDelta !== undefined ? { calibrativeDelta, calibrativeReason } : {}),
     ...(params.audience ? { audience: params.audience } : {}),
+    ...(falsifiability !== undefined ? { falsifiability } : {}),
+    ...(parentHash ? { parent_hash: parentHash } : {}),
+    ...(strictDiversityTriggered ? { strictModelDiversityApplied: true, minModelFamilyMdi: minFamilyMdi } : {}),
   } as VerificationResult;
 
   if (params.debug) {

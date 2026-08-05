@@ -1,4 +1,4 @@
-import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, CalibrationCriticResult } from '../types.js';
+import type { Provider, Proposal, Critique, CriticMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, CalibrationCriticResult, APIResponse } from '../types.js';
 
 // ── Adversarial Mode: "Find every flaw" ────────────────────────────────────
 const CRITIC_PROMPT_DE = `Du bist ein brutaler Red-Team Analyst und Fakten-Checker. Deine Aufgabe: Finde ALLE Schwächen in diesen Proposals.
@@ -380,8 +380,50 @@ When in doubt between material and notable, classify as MATERIAL. The system's b
   let response: { content: string };
   let usedModel = model;
 
+  // Latency budget: structured objections, not essays. 3072 keeps materiality
+  // block intact (LTS 91ae092). Generators keep default max tokens.
+  const CRITIC_MAX_TOKENS = 3072;
+
+  // Judgment determinism: materiality labels gate the verdict. Default sampling
+  // flipped labels run-to-run (measured 2026-06-12). temperature 0 for critic
+  // only (LTS 3486038).
+  const CRITIC_TEMPERATURE = 0;
+
   try {
-    response = await provider.call(model, prompt);
+    if (options?.classifyMateriality) {
+      // ── Self-consistency sampling (median-of-3) ────────────────────────────
+      // Even at temperature=0 borderline materialCount can flip. Median of 3
+      // parallel samples is stable; wall latency ≈ one call (LTS c9327aa).
+      const CRITIC_SAMPLES = 3;
+      const samples = await Promise.allSettled(
+        Array.from({ length: CRITIC_SAMPLES }, () =>
+          provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE)
+        )
+      );
+      const ok = samples
+        .filter((s): s is PromiseFulfilledResult<APIResponse> => s.status === 'fulfilled')
+        .map(s => s.value);
+      if (ok.length === 0) {
+        const firstErr = samples.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined;
+        throw new Error(String(firstErr?.reason ?? 'all critic samples failed'));
+      }
+      const scored = ok
+        .map(r => {
+          const m = parseMaterialityClassifications(r.content);
+          return { r, material: m.materialCount, notable: m.notableCount };
+        })
+        .sort((a, b) => a.material - b.material || a.notable - b.notable);
+      const median = scored[Math.floor(scored.length / 2)];
+      if (scored.length > 1 && scored[0].material !== scored[scored.length - 1].material) {
+        console.warn(
+          `[pot-sdk] Critic self-consistency: materialCount spread ` +
+          `[${scored.map(s => s.material).join(',')}] → median ${median.material} selected`
+        );
+      }
+      response = median.r;
+    } else {
+      response = await provider.call(model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
+    }
   } catch (primaryError: unknown) {
     const primaryMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
     console.warn(`[pot-sdk] Critic failed — model: ${model}, provider: ${provider.name}, error: ${primaryMsg}`);
@@ -397,7 +439,7 @@ When in doubt between material and notable, classify as MATERIAL. The system's b
           `[pot-sdk] Critic fallback — trying: ${fallback.model} ` +
           `(⚠️ author-verifier separation compromised: generator model used as critic)`
         );
-        response = await fallback.provider.call(fallback.model, prompt);
+        response = await fallback.provider.call(fallback.model, prompt, CRITIC_MAX_TOKENS, CRITIC_TEMPERATURE);
         usedModel = fallback.model;
         fallbackSucceeded = true;
         break;
