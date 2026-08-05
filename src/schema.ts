@@ -87,14 +87,25 @@ export function canonicalizeJcs(value: unknown): string {
 }
 
 /**
- * Pick canon by digest algorithm id.
- * Unknown / missing → legacy (safe for historical VCs).
+ * Pick canon by digest algorithm id — **strict allowlist**.
+ *
+ * Only two algorithm IDs are recognised:
+ * - `pot-schema-signing-v1` → legacy bespoke key-sort
+ * - `pot-jcs-sha256-v1` → JCS (RFC 8785)
+ *
+ * Anything else (unknown, empty, undefined) **throws** — fail-closed.
+ * Never silently default to legacy for an unrecognised algorithm.
  */
 export function canonicalizeForAlgorithm(value: unknown, algorithm?: string): string {
-  if (algorithm === DIGEST_ALG_JCS || algorithm === 'jcs' || algorithm === 'RFC8785') {
+  if (algorithm === DIGEST_ALG_JCS) {
     return canonicalizeJcs(value);
   }
-  return canonicalize(value);
+  if (algorithm === DIGEST_ALG_LEGACY) {
+    return canonicalize(value);
+  }
+  throw new Error(
+    `canonicalizeForAlgorithm(): unsupported algorithm "${algorithm ?? '(none)'}" — expected "${DIGEST_ALG_LEGACY}" or "${DIGEST_ALG_JCS}"`,
+  );
 }
 
 /**

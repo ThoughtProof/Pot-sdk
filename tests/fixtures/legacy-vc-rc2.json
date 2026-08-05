@@ -1,0 +1,58 @@
+{
+  "@context": "https://thoughtproof.ai/ctx/a2a/v1",
+  "type": "VerificationCredential",
+  "tp_version": "2.0",
+  "id": "tp:vc:2d37b6b7-a4d6-467e-a823-6b74ffcf8a7e",
+  "issued_at": "2026-08-05T21:59:04.334Z",
+  "expires_at": null,
+  "issuer": {
+    "id": "https://thoughtproof.ai",
+    "sdk_version": "2.0.0",
+    "pipeline": "PoT-5-Stage",
+    "unaudited": true
+  },
+  "subject": {
+    "claim_hash": "sha256:11e14c9a5cdac4eea9e9cdeaede2981710c4b58bbda8021ffd46b101296e5877",
+    "claim_preview": "legacy fixture test claim",
+    "type": "text",
+    "request_id": "req_0e4cbde2-b041-4737-b028-01a152176e81"
+  },
+  "result": {
+    "verdict": "ALLOW",
+    "confidence": 0.85,
+    "consensus_threshold": 0.7,
+    "consensus_reached": true,
+    "metrics": {
+      "mdi": 0.75,
+      "sas": 0,
+      "dpr": {
+        "score": 0,
+        "total_objections": 0,
+        "preserved": 0,
+        "false_consensus": false,
+        "objection_keywords": []
+      }
+    },
+    "synthesis": "Test synthesis for legacy fixture",
+    "dissent": [],
+    "adversarial_patterns_detected": [],
+    "false_consensus_flag": false
+  },
+  "pipeline": {
+    "mode": "standard",
+    "generators": [
+      "grok",
+      "gemini"
+    ],
+    "critic": "deepseek",
+    "synthesizer": "sonnet",
+    "rounds": 1,
+    "duration_ms": 1234
+  },
+  "proof": {
+    "type": "SHA256-Canonical",
+    "algorithm": "pot-schema-signing-v1",
+    "hash": "sha256:6f4ed09d0e9525740f9f511b6902d9d75c6a1b7975d0b3a559e72503b9752a1c",
+    "signed_at": "2026-08-05T21:59:04.334Z"
+  }
+}
