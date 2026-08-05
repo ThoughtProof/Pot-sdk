@@ -7,7 +7,7 @@
 
 import { createHash } from 'crypto';
 import type { TPVerificationCredential } from './types.js';
-import { canonicalize } from './schema.js';
+import { canonicalizeForAlgorithm } from './schema.js';
 
 export interface CredentialVerifyResult {
   /** Overall validity (hash matches + not expired + well-formed) */
@@ -62,9 +62,10 @@ export function verifyCredential(vc: TPVerificationCredential): CredentialVerify
   // Check expiry
   const expired = vc.expires_at ? new Date(vc.expires_at) < new Date() : false;
 
-  // Recompute hash over VC body (everything except `proof`)
+  // Recompute hash over VC body (everything except `proof`).
+  // Dual-path: JCS for pot-jcs-sha256-v1, legacy key-sort for historical digests.
   const { proof, ...body } = vc;
-  const canonical = canonicalize(body);
+  const canonical = canonicalizeForAlgorithm(body, vc.proof.algorithm);
   const currentHash = `sha256:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
   const hashMatch = currentHash === vc.proof.hash;
 

@@ -124,7 +124,16 @@ export type { DivergenceReport, DivergenceLevel } from './divergence.js';
 export { computeDPR } from './metrics/dpr.js';
 
 // ── Schema ────────────────────────────────────────────────────────────────────
-export { signSchema, verifySchema, canonicalize } from './schema.js';
+export {
+  signSchema,
+  verifySchema,
+  canonicalize,
+  canonicalizeLegacy,
+  canonicalizeJcs,
+  canonicalizeForAlgorithm,
+  DIGEST_ALG_LEGACY,
+  DIGEST_ALG_JCS,
+} from './schema.js';
 export type { SchemaSignature, SchemaVerifyResult } from './schema.js';
 
 // ── Sandbox ───────────────────────────────────────────────────────────────────
