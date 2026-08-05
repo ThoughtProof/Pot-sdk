@@ -48,19 +48,16 @@ describe('JCS canonicalize (PR-C hygiene)', () => {
     expect(a).toBe('{"a":2,"b":1}');
   });
 
-  it('legacy and JCS produce different canonical output on nested objects', () => {
-    // JCS normalizes Unicode escapes and whitespace differently from
-    // the bespoke key-sort; on nested objects with arrays the output differs.
+  it('legacy and JCS agree on representative nested JSON', () => {
+    // Both algorithms produce the same canonical form for this representative
+    // nested JSON value, preserving digest compatibility for equivalent output.
     const obj = { z: true, a: [2, 1], m: { y: 1, x: 2 } };
     const legacy = canonicalize(obj);
     const jcs = canonicalizeJcs(obj);
-    // Both deterministic
+
     expect(canonicalize(obj)).toBe(legacy);
     expect(canonicalizeJcs(obj)).toBe(jcs);
-    // They are different algorithms — canonical forms may differ
-    // (JCS uses minimal JSON.stringify; legacy uses custom sort+stringify)
-    expect(typeof legacy).toBe('string');
-    expect(typeof jcs).toBe('string');
+    expect(jcs).toBe(legacy);
   });
 
   it('canonicalizeForAlgorithm routes by algorithm id (strict allowlist)', () => {
