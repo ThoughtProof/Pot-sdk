@@ -1,4 +1,30 @@
-# pot-sdk v2.0.0 — Specification
+# pot-sdk — Specification
+
+> **Current: v3.0.0-rc.2** (`origin/master`). The v2.0.0/v0.1 text below is **archived/legacy** — kept for history, not current API. Authoritative API surface = `src/index.ts` exports.
+
+## v3.0.0-rc.2 — Current API at a glance
+
+**Pipeline (verify):** `runGenerators` (≥3 families, parallel) → blind cross-model `runCritic` (fact/logic/materiality, median-of-3 self-consistency) → reasoning-based `aggregateFromReasoning` (independent confidence vs synthesizer-stated; upward deflation override 0.6) → `runSynthesizer` (confidence caps, explicit dissent, verification-mode caps) → optional compositor/decomposer, guard, extractor, factcheck, diversifier, sandbox, security scan.
+
+**Verdict:** `ALLOW | BLOCK | UNCERTAIN`. **Tier:** `lite | standard`. **Stake:** `low | medium | high | critical`.
+
+**Metrics:** `confidence`, `mdi` (model-**family** HHI `1 − Σ fᵢ²`, `computeModelFamilyMDI`), `sas`, plus `computeDPR`, `calibrateConfidence`.
+
+**Epistemic block / attestation:** `createAttestation` + `verifyCredential` — `TPVerificationCredential` (`subject`/`result`/`meta`), SHA-256 content hash, Ed25519/JWKS signature. **WP5 (opt-in):** `falsifiability` + `parent_hash` mirrored on result and VC; `strictModelDiversity`/`minModelFamilyMdi` → `UNCERTAIN` under threshold.
+
+**Extended surface:** security (`scanForAdversarialPatterns`), sandbox, schema, divergence report, ERC-8004 validation records (`toValidationRecord`/`createTrustDeclaration`/`getFinalityLevel`), providers (`createProvider`/`assignRoles`), `deepAnalysis`, domain profiles/lockfile.
+
+**Key entry points (from `src/index.ts`):** `verify`, `deepAnalysis`, `createAttestation`, `verifyCredential`, `detectStake`, `runGuard`, `runExtractor`, `factCheckCritic`, `aggregateFromReasoning`, `computeDPR`, `calibrateConfidence`, `scanForAdversarialPatterns`, `toValidationRecord`, `createProvider`.
+
+**Providers:** Anthropic (native) + OpenAI-compatible xAI/Grok, DeepSeek, Moonshot/Kimi, Gemini/Google, OpenAI, Serv/openserv.
+
+**Known gaps (honest):** no maintained DAG across blocks (single opt-in `parent_hash`); no adaptive Triad/HIGCD (network-scope, out of SDK); MDI diminishing-returns weight schedule (1st 100%/2nd 70%/3rd 50%) not implemented (Claim 5 partial).
+
+> Legacy follows (v2.0.0 breaking-change header + archived v0.1) — **not** the current API.
+
+---
+
+# pot-sdk v2.0.0 — Specification (ARCHIVED LEGACY)
 
 > **v2.0 breaking changes:** Verdict enum is now `ALLOW | BLOCK | UNCERTAIN`. Tier is `lite | standard`. `StakeLevel` removed `micro`. New required response fields: `severity_score`, `mdi`, `objections`, `domain`, `stakeLevel`, `durationMs`. See `KB/SPEC-v2.0-production-design.md` for the full design spec.
 

@@ -96,8 +96,10 @@ Human-in-the-loop hook for EU AI Act Art. 12-14 compliance.
 | Metric | What it measures |
 |--------|-----------------|
 | `confidence` | Overall verification confidence (0–1) |
-| `mdi` | Model Diversity Index — input-side diversity |
+| `mdi` | Model Diversity Index — model-**family** diversity via `1 − Σ fᵢ²` (HHI); higher = more independent families |
 | `sas` | Synthesis Audit Score — output fidelity to generator inputs |
+
+> **MDI nuance:** `mdi` is the patent-defined **family** HHI. A separate keyword-overlap signal derived from the proposals (used internally for agreement/coverage) is **not** `mdi` — do not read it as the patent metric. Family resolution lives in `resolveModelFamily`; an opt-in `strictModelDiversity` (below `minModelFamilyMdi`) returns `UNCERTAIN` instead of a soft flag.
 
 ## BYOK
 
@@ -105,7 +107,7 @@ Bring your own API keys. pot-sdk never proxies your requests — everything runs
 
 ## Supported Providers
 
-Built-in: Anthropic, OpenAI, xAI, DeepSeek, Moonshot
+Built-in: Anthropic (native) and OpenAI-compatible backends for xAI/Grok, DeepSeek, Moonshot/Kimi, Gemini/Google, OpenAI, plus **Serv/openserv** (`ServProvider`), all via `src/providers/`. (`MoonshotProvider`, `DeepSeekProvider`, `XAIProvider`, `ServProvider` in `src/providers/openai.ts`.)
 
 Any OpenAI-compatible endpoint works via `baseUrl` (Ollama, Together.ai, custom deployments). BYOK — no keys bundled, everything runs on your infrastructure.
 
