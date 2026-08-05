@@ -119,14 +119,16 @@ export function createAttestation(
     },
   };
 
-  // Compute proof hash over canonical JSON of the VC body
+  // Compute integrity hash over canonical JSON of the VC body.
+  // This is a content-binding digest, NOT a cryptographic signature.
+  // verifyCredential() only re-computes this hash and checks expiry.
   const canonical = canonicalize(vcBody);
   const hash = `sha256:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
 
   return {
     ...vcBody,
     proof: {
-      type: 'SHA256-Canonical',
+      type: 'SHA256-Canonical-Digest',
       algorithm: 'pot-schema-signing-v1',
       hash,
       signed_at: now,
