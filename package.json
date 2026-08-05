@@ -45,5 +45,8 @@
     "pot-sandbox": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "canonicalize": "^2.1.0"
   }
 }

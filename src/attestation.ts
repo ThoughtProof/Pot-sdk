@@ -8,7 +8,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import type { VerificationResult, TPVerificationCredential, DPRResult } from './types.js';
-import { canonicalize } from './schema.js';
+import { canonicalizeJcs, DIGEST_ALG_JCS } from './schema.js';
 
 const SDK_VERSION = '2.0.0';
 
@@ -119,17 +119,17 @@ export function createAttestation(
     },
   };
 
-  // Compute integrity hash over canonical JSON of the VC body.
-  // This is a content-binding digest, NOT a cryptographic signature.
-  // verifyCredential() only re-computes this hash and checks expiry.
-  const canonical = canonicalize(vcBody);
+  // Compute integrity hash over JCS-canonical JSON of the VC body (RFC 8785).
+  // Content-binding digest only — NOT a cryptographic signature.
+  // New emissions use pot-jcs-sha256-v1; verifyCredential dual-paths legacy digests.
+  const canonical = canonicalizeJcs(vcBody);
   const hash = `sha256:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
 
   return {
     ...vcBody,
     proof: {
-      type: 'SHA256-Canonical-Digest',
-      algorithm: 'pot-schema-signing-v1',
+      type: 'SHA256-JCS-Digest',
+      algorithm: DIGEST_ALG_JCS,
       hash,
       signed_at: now,
     },

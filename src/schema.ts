@@ -15,6 +15,10 @@
  */
 
 import { createHash } from 'crypto';
+// RFC 8785 JSON Canonicalization Scheme — same package Sentinel uses for package_digest
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore - canonicalize default export; types are loose
+import jcsCanonicalize from 'canonicalize';
 
 export interface SchemaSignature {
   /** SHA-256 hash of the canonical schema JSON */
@@ -40,12 +44,17 @@ export interface SchemaVerifyResult {
   status: 'clean' | 'drifted' | 'invalid-signature';
 }
 
+/** Legacy digest algorithm id (bespoke key-sort canon). Historical VCs. */
+export const DIGEST_ALG_LEGACY = 'pot-schema-signing-v1';
+/** New records: JCS (RFC 8785) + SHA-256 — aligned with Sentinel package_digest. */
+export const DIGEST_ALG_JCS = 'pot-jcs-sha256-v1';
+
 const SDK_VERSION = '0.3.0';
 
 /**
- * Canonicalize any value to a stable JSON string.
- * Keys are sorted recursively to ensure determinism.
- * Exported for use by attestation.ts and credential.ts (v0.3+).
+ * Legacy bespoke canonicalization (recursive key-sort, no full JCS rules).
+ * Kept for verifying historical digests (`pot-schema-signing-v1`).
+ * Prefer {@link canonicalizeJcs} for **new** external-interop records.
  */
 export function canonicalize(value: unknown): string {
   if (value === null || typeof value !== 'object') {
@@ -59,6 +68,44 @@ export function canonicalize(value: unknown): string {
     .map(k => JSON.stringify(k) + ':' + canonicalize((value as Record<string, unknown>)[k]))
     .join(',');
   return '{' + sorted + '}';
+}
+
+/** Explicit alias for dual-path verifiers / docs. */
+export const canonicalizeLegacy = canonicalize;
+
+/**
+ * RFC 8785 JSON Canonicalization Scheme (JCS).
+ * Same algorithm Sentinel uses for `package_digest` / canonical verdict bodies.
+ * Use for **new** content-binding digests so adapters share one canon.
+ */
+export function canonicalizeJcs(value: unknown): string {
+  const out = (jcsCanonicalize as unknown as (v: unknown) => string | undefined)(value);
+  if (typeof out !== 'string') {
+    throw new Error('canonicalizeJcs(): JCS canonicalize did not return a string');
+  }
+  return out;
+}
+
+/**
+ * Pick canon by digest algorithm id — **strict allowlist**.
+ *
+ * Only two algorithm IDs are recognised:
+ * - `pot-schema-signing-v1` → legacy bespoke key-sort
+ * - `pot-jcs-sha256-v1` → JCS (RFC 8785)
+ *
+ * Anything else (unknown, empty, undefined) **throws** — fail-closed.
+ * Never silently default to legacy for an unrecognised algorithm.
+ */
+export function canonicalizeForAlgorithm(value: unknown, algorithm?: string): string {
+  if (algorithm === DIGEST_ALG_JCS) {
+    return canonicalizeJcs(value);
+  }
+  if (algorithm === DIGEST_ALG_LEGACY) {
+    return canonicalize(value);
+  }
+  throw new Error(
+    `canonicalizeForAlgorithm(): unsupported algorithm "${algorithm ?? '(none)'}" — expected "${DIGEST_ALG_LEGACY}" or "${DIGEST_ALG_JCS}"`,
+  );
 }
 
 /**

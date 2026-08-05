@@ -7,7 +7,26 @@
 
 import { createHash } from 'crypto';
 import type { TPVerificationCredential } from './types.js';
-import { canonicalize } from './schema.js';
+import { canonicalizeForAlgorithm, DIGEST_ALG_JCS, DIGEST_ALG_LEGACY } from './schema.js';
+
+/**
+ * Valid (proof.type, proof.algorithm) pairs.
+ * Both fields must agree; a mismatch is treated as malformed.
+ *
+ * Historical variants:
+ * - 'SHA256-Canonical' (pre-#6, published rc.2)
+ * - 'SHA256-Canonical-Digest' (post-#6, current master)
+ */
+const VALID_TYPE_ALG_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['SHA256-Canonical', DIGEST_ALG_LEGACY],
+  ['SHA256-Canonical-Digest', DIGEST_ALG_LEGACY],
+  ['SHA256-JCS-Digest', DIGEST_ALG_JCS],
+];
+
+function isValidTypeAlgPair(type: string | undefined, algorithm: string | undefined): boolean {
+  if (!type || !algorithm) return false;
+  return VALID_TYPE_ALG_PAIRS.some(([t, a]) => t === type && a === algorithm);
+}
 
 export interface CredentialVerifyResult {
   /** Overall validity (hash matches + not expired + well-formed) */
@@ -47,7 +66,7 @@ export interface CredentialVerifyResult {
  * ```
  */
 export function verifyCredential(vc: TPVerificationCredential): CredentialVerifyResult {
-  // Malformed check
+  // Malformed check — structure
   if (!vc || !vc.proof || !vc.proof.hash || !vc.type || vc.type !== 'VerificationCredential') {
     return {
       valid: false,
@@ -59,12 +78,26 @@ export function verifyCredential(vc: TPVerificationCredential): CredentialVerify
     };
   }
 
+  // Malformed check — proof.type ↔ proof.algorithm consistency (fail-closed)
+  if (!isValidTypeAlgPair(vc.proof.type, vc.proof.algorithm)) {
+    return {
+      valid: false,
+      hash_match: false,
+      current_hash: '',
+      expected_hash: vc.proof.hash,
+      expired: false,
+      status: 'malformed',
+    };
+  }
+
   // Check expiry
   const expired = vc.expires_at ? new Date(vc.expires_at) < new Date() : false;
 
-  // Recompute hash over VC body (everything except `proof`)
+  // Recompute hash over VC body (everything except `proof`).
+  // Dual-path: JCS for pot-jcs-sha256-v1, legacy key-sort for historical digests.
+  // canonicalizeForAlgorithm throws on unsupported algorithm — already validated above.
   const { proof, ...body } = vc;
-  const canonical = canonicalize(body);
+  const canonical = canonicalizeForAlgorithm(body, vc.proof.algorithm);
   const currentHash = `sha256:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
   const hashMatch = currentHash === vc.proof.hash;
 
