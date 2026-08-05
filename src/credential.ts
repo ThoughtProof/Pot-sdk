@@ -29,14 +29,20 @@ export interface CredentialVerifyResult {
  *
  * Checks:
  * 1. Structure — required fields present
- * 2. Integrity — proof hash matches canonical body
+ * 2. Integrity — content digest matches canonical body (SHA-256, NOT a signature)
  * 3. Expiry — not past expires_at
+ *
+ * IMPORTANT: This verifies **integrity only** (bytes unaltered, not expired).
+ * It does NOT verify **authenticity** (who issued this record). The `proof`
+ * field is a content-binding digest, not a cryptographic signature. Anyone
+ * can compute the same digest over the same body. For issuer authentication,
+ * use a signed attestation (EAS, Ed25519) instead.
  *
  * @example
  * ```typescript
  * const check = verifyCredential(vc);
  * if (check.valid) {
- *   // VC is authentic and untampered
+ *   // VC body is untampered and not expired — but NOT cryptographically authenticated
  * }
  * ```
  */
