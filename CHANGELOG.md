@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — freeze-library (feat/freeze-library-lts-wp5)
+## v3.0.0-rc.2 — 2026-08-05
 
 **Scope:** trunk only (`master` line). Does **not** change `release/1.4.1-serv` / npm `1.4.5` / `thoughtproof-api` pin.
 
@@ -8,6 +8,7 @@
 - Fix `extractKeywords` regex (`\s`) — content MDI was pinned at 1.0 (from LTS `49700c1`)
 - Critic: `temperature=0`, maxTokens 3072, median-of-3 self-consistency when `classifyMateriality` (from LTS `3486038`/`c9327aa`)
 - Provider `call(model, prompt, maxTokens?, temperature?)` — backward compatible optional args
+- Guard + Extractor: inline system instructions into user prompt (LTS 1.4.2 honesty fix — third `call` arg is maxTokens, not systemPrompt)
 
 ### WP5 (opt-in / optional metadata — default path unchanged)
 - `strictModelDiversity` + `minModelFamilyMdi` (default 0.4): forces ALLOW→UNCERTAIN when family MDI too low

@@ -51,15 +51,18 @@ export interface GuardResult {
  * Accepts pot-sdk's Provider interface (call-based).
  */
 export async function runGuard(
-  provider: { call: (model: string, prompt: string, systemPrompt?: string) => Promise<{ content: string }> },
+  // NOTE (LTS 1.4.2): third call() arg is maxTokens. Earlier code passed
+  // GUARD_SYSTEM_PROMPT there — real providers never read it. Inline so
+  // instructions actually apply; types match Provider.call.
+  provider: { call: (model: string, prompt: string, maxTokens?: number, temperature?: number) => Promise<{ content: string }> },
   model: string,
   input: string,
 ): Promise<GuardResult> {
   const start = Date.now();
 
   try {
-    const prompt = GUARD_USER_TEMPLATE.replace('{INPUT}', input);
-    const result = await provider.call(model, prompt, GUARD_SYSTEM_PROMPT);
+    const prompt = GUARD_SYSTEM_PROMPT + '\n\n' + GUARD_USER_TEMPLATE.replace('{INPUT}', input);
+    const result = await provider.call(model, prompt);
     const response = result.content;
 
     const latencyMs = Date.now() - start;

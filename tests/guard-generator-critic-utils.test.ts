@@ -5,7 +5,7 @@ import { runCritic, parseCalibrationCriticResult, parseClassifiedObjections } fr
 import { computeMdi } from '../src/utils.js';
 import type { Proposal, Provider } from '../src/types.js';
 
-function makeProvider(fn: (model: string, prompt: string, systemPrompt?: string) => Promise<{ content: string }>): Provider {
+function makeProvider(fn: (model: string, prompt: string, maxTokens?: number, temperature?: number) => Promise<{ content: string }>): Provider {
   return {
     name: 'test-provider',
     call: fn,
