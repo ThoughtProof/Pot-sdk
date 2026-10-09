@@ -1,7 +1,7 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
 import { DOMAIN_PROFILES, DOMAIN_REFERENCE_CONTEXT, checkToxicCombination, resolveDomain, detectDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
-import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence, claimBearingProposalIndexes, critiqueMentionsClaimUnverified } from './pipeline/critic.js';
+import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence, claimBearingProposalIndexes, critiqueMentionsClaimUnverified, claimIsFactualAccusation } from './pipeline/critic.js';
 import type { MaterialityResult } from './pipeline/critic.js';
 import { factCheckCritic } from './pipeline/factcheck.js';
 import { runGenerators } from './pipeline/generator.js';
@@ -174,6 +174,21 @@ interface VerifyParams {
    * Credit: ISA 320 / PCAOB AS 1105 — "materiality = threshold for decision-changing"
    */
   classifyMateriality?: boolean;
+  /**
+   * Factual-claim scoring. `'fact'` is opt-in: thoughtproof-api sets it when
+   * claimType is fact. Precision, incompleteness, and generator disagreement
+   * then do not count as material. Bare unverified doubt does not count only
+   * when the critic marks it `[SCOPE:peripheral]` (exact numbering, a minor
+   * date, or sourcing) and the claim is not an accusation of crime,
+   * misconduct, causing death, or legal liability against a named person or
+   * organization. A missing or garbled SCOPE counts as core. Falsehoods,
+   * fabrications, misattributions, and an explicit counter-fact
+   * (`is false: Kenya`) stay material. A missing or garbled KIND tag still
+   * counts as material.
+   * Omitted or `'decision'` keeps decision-check scoring exactly.
+   * Takes effect together with `classifyMateriality`.
+   */
+  claimMode?: 'fact' | 'decision';
   /**
    * v1.2+: Trust boundaries — separates trusted context from claims to verify.
    * When context.trusted is provided, the critic accepts those facts as given
@@ -591,7 +606,9 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     };
   }
 
-  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, trustContext: params.context }, gensProviders);
+  const factMode = params.claimMode === 'fact';
+  const accusation = factMode && claimIsFactualAccusation(question);
+  const critique = await runCritic(criticProvider, criticModel, proposals, lang, false, undefined, effectiveCriticMode, { requireCitation, classifyObjections, classifyMateriality: params.classifyMateriality, factMode, accusation, trustContext: params.context }, gensProviders);
 
   // v0.6: Multi-round fact-checking — the critic gets checked
   let factCheckedObjections: import('./pipeline/factcheck.js').FactCheckedObjection[] | undefined;
@@ -688,7 +705,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   const claimProposalIndexes = claimBearingProposalIndexes(proposals);
   if (critiqueMentionsClaimUnverified(
     critique.content,
-    parseMaterialityClassifications(critique.content, { claimProposalIndexes }),
+    parseMaterialityClassifications(critique.content, { claimProposalIndexes, factMode, accusation }),
   )) flags.push('unverified-claims');
   // Only flag synthesis-dominance when 3+ generators exist — with 2 generators,
   // some dominance is expected and should not block VERIFIED verdict.
@@ -793,7 +810,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // This replaces the synthesis-based confidence for ALLOW/HOLD decisions
   let materialityResult: MaterialityResult | undefined;
   if (params.classifyMateriality) {
-    materialityResult = parseMaterialityClassifications(critique.content, { claimProposalIndexes });
+    materialityResult = parseMaterialityClassifications(critique.content, { claimProposalIndexes, factMode, accusation });
     const materialityConfidence = calculateMaterialityConfidence(materialityResult);
 
     // Use materiality confidence if it's HIGHER than synthesis confidence
