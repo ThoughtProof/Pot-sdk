@@ -364,17 +364,25 @@ For each objection you raise, you MUST classify its materiality level:
 THE TEST: "Would a competent human reviewer, seeing this objection, CHANGE the decision?"
 If YES → material. If they'd NOTE it but PROCEED → notable. If they'd IGNORE it → minor.
 
-Format each objection as:
-[MATERIALITY:material|notable|minor] OBJECTION: [description]
+TARGET (CRITICAL — DO THIS FOR EVERY OBJECTION):
+The PROPOSAL blocks above are candidate answers from other models. They often add numbers, citations, and reasoning that are NOT part of the claim under verification. A defect that exists only in that extra generator content must not be charged to the claim.
 
-ALSO provide an OVERALL ASSESSMENT at the end:
+[TARGET:claim] = The objection is about the claim under verification: a false fact in the claim, a conclusion that does not follow from it, or a passage that asserts, repeats, or relies on that claim. A proposal whose heading says user-output IS the claim — objections to it are claim. If an objection applies to the claim AND to a proposal, use claim. If you are unsure, use claim.
+[TARGET:proposal:N] = The objection is ONLY about extra content in PROPOSAL N (1-based, matching the PROPOSAL heading): an unsourced number, a citation, or a reasoning style the generator added. Deleting that extra sentence would leave the claim intact. Never use proposal:N for user-output.
+
+Format EACH objection on one line:
+[TARGET:claim|proposal:N][MATERIALITY:material|notable|minor] OBJECTION: [description]
+
+ALSO provide an OVERALL ASSESSMENT at the end. It is about the claim under verification ONLY. Defects that exist only in generator-added proposal content must not make this questionable or deficient.
 [OVERALL:sound|adequate|questionable|deficient]
-- sound = no material objections, reasoning is solid
-- adequate = no material objections, but notable improvements possible
-- questionable = borderline material issues, decision is debatable
-- deficient = material objections found, decision should not proceed
+- sound = no material objections against the claim, reasoning is solid
+- adequate = no material objections against the claim, but notable improvements possible
+- questionable = borderline material issues in the claim, decision is debatable
+- deficient = material objections against the claim, decision should not proceed
 
-When in doubt between material and notable, classify as MATERIAL. The system's bias should remain conservative.
+When in doubt between material and notable, classify as MATERIAL.
+When in doubt between claim and proposal, use [TARGET:claim].
+The system's bias should remain conservative on the claim itself.
 
 OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restate the proposals — go straight to the classified objections. Your entire response should be the objection list plus the overall assessment.`;
   }
@@ -424,11 +432,13 @@ OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restat
         const firstErr = samples.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined;
         throw new Error(String(firstErr?.reason ?? 'all critic samples failed'));
       }
-      // Median by materialCount (tie-break: lower notableCount → the less
-      // alarmist of equally-material critiques; deterministic ordering).
+      // Median by claim-scoped materialCount (proposal-targeted objections
+      // do not count). Tie-break: lower notableCount → the less alarmist of
+      // equally-material critiques; deterministic ordering.
+      const claimProposalIndexes = claimBearingProposalIndexes(proposals);
       const scored = ok
         .map(r => {
-          const m = parseMaterialityClassifications(r.content);
+          const m = parseMaterialityClassifications(r.content, { claimProposalIndexes });
           return { r, material: m.materialCount, notable: m.notableCount };
         })
         .sort((a, b) => a.material - b.material || a.notable - b.notable);
@@ -506,9 +516,21 @@ export function parseClassifiedObjections(critiqueContent: string): ClassifiedOb
 export type MaterialityLevel = 'material' | 'notable' | 'minor';
 export type OverallAssessment = 'sound' | 'adequate' | 'questionable' | 'deficient';
 
+/** Where an objection lands. `proposal:<n>` is 1-based, matching PROPOSAL headings. */
+export type ObjectionTarget = 'claim' | `proposal:${number}`;
+
 export interface MaterialityObjection {
   materiality: MaterialityLevel;
   description: string;
+  /**
+   * What the objection is about. Missing or garbled TARGET tags are stored
+   * as `claim` so they still count (fail-closed).
+   */
+  target?: ObjectionTarget;
+  /** True when TARGET was absent or not a usable `claim` / `proposal:<n>` value. */
+  targetDefaulted?: boolean;
+  /** False when excluded from materiality counts and confidence penalties. */
+  scored?: boolean;
 }
 
 export interface MaterialityResult {
@@ -517,17 +539,96 @@ export interface MaterialityResult {
   notableCount: number;
   minorCount: number;
   hasMaterialDefect: boolean;
+  /** Raw critic label. May mention proposal-only defects. */
   overallAssessment: OverallAssessment;
+  /**
+   * Overall used for confidence caps. A harsh raw overall is relaxed to
+   * `sound` when every parsed objection is explicitly proposal-scoped, so
+   * generator-only defects do not cap the claim. Empty objection lists keep
+   * the raw overall (fail-closed).
+   */
+  scoringOverallAssessment?: OverallAssessment;
 }
 
-export function parseMaterialityClassifications(critiqueContent: string): MaterialityResult {
-  const pattern = /\[MATERIALITY:(material|notable|minor)\]\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[OVERALL:|\n\n|$)/gs;
+export interface ParseMaterialityOptions {
+  /**
+   * 1-based indexes of proposals whose text is the claim (model `user-output`).
+   * A `TARGET:proposal:N` tag for one of these is scored as `claim`.
+   */
+  claimProposalIndexes?: number[];
+}
+
+/** 1-based indexes of proposals that carry the claim text rather than a generator answer. */
+export function claimBearingProposalIndexes(proposals: Array<{ model: string }>): number[] {
+  const indexes: number[] = [];
+  proposals.forEach((proposal, index) => {
+    if (proposal.model === 'user-output') indexes.push(index + 1);
+  });
+  return indexes;
+}
+
+function parseTargetBody(raw: string | undefined): { target: ObjectionTarget; defaulted: boolean } {
+  if (raw == null) return { target: 'claim', defaulted: true };
+  const body = raw.trim().toLowerCase().replace(/\s+/g, '');
+  if (body === 'claim') return { target: 'claim', defaulted: false };
+  const proposal = /^proposal:(\d+)$/.exec(body);
+  if (proposal) {
+    const index = Number(proposal[1]);
+    if (Number.isInteger(index) && index >= 1) {
+      return { target: `proposal:${index}`, defaulted: false };
+    }
+  }
+  // Missing number, zero, or any other token: fail closed onto the claim.
+  return { target: 'claim', defaulted: true };
+}
+
+function resolveAdjacentTarget(
+  content: string,
+  materialityIndex: number,
+  materialityTagLength: number,
+): { target: ObjectionTarget; defaulted: boolean } {
+  const before = content.slice(0, materialityIndex);
+  const after = content.slice(materialityIndex + materialityTagLength);
+  const beforeMatch = before.match(/\[TARGET:([^\]]*)\]\s*$/i);
+  const afterMatch = after.match(/^\s*\[TARGET:([^\]]*)\]/i);
+  const parsed = [beforeMatch?.[1], afterMatch?.[1]]
+    .filter((value): value is string => value != null)
+    .map(parseTargetBody);
+  if (parsed.length === 0) return { target: 'claim', defaulted: true };
+  // Claim wins if both sides are tagged. A real claim defect must not be
+  // dropped because a proposal tag was also present.
+  const claim = parsed.find(item => !item.defaulted && item.target === 'claim');
+  if (claim) return claim;
+  const proposal = parsed.find(item => !item.defaulted && item.target.startsWith('proposal:'));
+  if (proposal) return proposal;
+  return { target: 'claim', defaulted: true };
+}
+
+export function parseMaterialityClassifications(
+  critiqueContent: string,
+  options?: ParseMaterialityOptions,
+): MaterialityResult {
+  const pattern = /\[MATERIALITY:(material|notable|minor)\](?:\s*\[TARGET:[^\]]*\])?\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[TARGET:|\[OVERALL:]|\n\n|$)/gis;
+  const claimIndexes = new Set(options?.claimProposalIndexes ?? []);
   const objections: MaterialityObjection[] = [];
   let match;
   while ((match = pattern.exec(critiqueContent)) !== null) {
+    const tagMatch = /^\[MATERIALITY:[^\]]+\]/i.exec(match[0]);
+    const tagLength = tagMatch ? tagMatch[0].length : match[0].length;
+    let resolved = resolveAdjacentTarget(critiqueContent, match.index, tagLength);
+    if (!resolved.defaulted && resolved.target.startsWith('proposal:')) {
+      const index = Number(resolved.target.slice('proposal:'.length));
+      if (claimIndexes.has(index)) {
+        resolved = { target: 'claim', defaulted: false };
+      }
+    }
+    let description = match[2].trim().replace(/^\[TARGET:[^\]]*\]\s*/i, '').replace(/^OBJECTION:\s*/i, '');
     objections.push({
-      materiality: match[1] as MaterialityLevel,
-      description: match[2].trim().slice(0, 800),
+      materiality: match[1].toLowerCase() as MaterialityLevel,
+      description: description.trim().slice(0, 800),
+      target: resolved.target,
+      targetDefaulted: resolved.defaulted,
+      scored: resolved.target === 'claim',
     });
   }
 
@@ -535,9 +636,18 @@ export function parseMaterialityClassifications(critiqueContent: string): Materi
   const overallMatch = critiqueContent.match(/\[OVERALL:(sound|adequate|questionable|deficient)\]/i);
   const overallAssessment: OverallAssessment = (overallMatch?.[1]?.toLowerCase() as OverallAssessment) || 'questionable';
 
-  const materialCount = objections.filter(o => o.materiality === 'material').length;
-  const notableCount = objections.filter(o => o.materiality === 'notable').length;
-  const minorCount = objections.filter(o => o.materiality === 'minor').length;
+  const scored = objections.filter(objection => objection.scored !== false);
+  const materialCount = scored.filter(o => o.materiality === 'material').length;
+  const notableCount = scored.filter(o => o.materiality === 'notable').length;
+  const minorCount = scored.filter(o => o.materiality === 'minor').length;
+
+  const explicitProposalOnly = objections.length > 0 && objections.every(
+    objection => objection.scored === false && objection.targetDefaulted === false,
+  );
+  const harshOverall = overallAssessment === 'deficient' || overallAssessment === 'questionable';
+  const scoringOverallAssessment: OverallAssessment = explicitProposalOnly && harshOverall
+    ? 'sound'
+    : overallAssessment;
 
   return {
     objections,
@@ -546,12 +656,33 @@ export function parseMaterialityClassifications(critiqueContent: string): Materi
     minorCount,
     hasMaterialDefect: materialCount > 0,
     overallAssessment,
+    scoringOverallAssessment,
   };
+}
+
+/**
+ * True when "unverified" refers to the claim. Mentions that live only inside
+ * explicitly proposal-scoped objections are ignored; anything else still flags.
+ */
+export function critiqueMentionsClaimUnverified(
+  critiqueContent: string,
+  parsed: MaterialityResult,
+): boolean {
+  if (!/\bunverified\b/i.test(critiqueContent)) return false;
+  let remainder = critiqueContent;
+  for (const objection of parsed.objections) {
+    if (objection.scored === false && objection.description) {
+      remainder = remainder.replace(objection.description, ' ');
+    }
+  }
+  return /\bunverified\b/i.test(remainder);
 }
 
 /**
  * v1.2.1: Calculate confidence from materiality-weighted objections.
  * material = -0.30, notable = -0.10, minor = -0.02
+ * Counts are claim-scoped: proposal-targeted objections are already excluded
+ * from materialCount / notableCount / minorCount.
  * Replaces the flat confidence when materiality data is available.
  */
 export function calculateMaterialityConfidence(result: MaterialityResult): number {
