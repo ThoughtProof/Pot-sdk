@@ -16,3 +16,9 @@ This is default-on whenever `classifyMateriality` is enabled. There is no new `v
 - A `TARGET:proposal:N` tag aimed at a proposal whose model is `user-output` is scored as `claim`, because that text is the claim.
 - `MaterialityObjection` gains optional `target`, `targetDefaulted`, and `scored` fields. `overallAssessment` stays the critic's raw label. `scoringOverallAssessment` is the value used for confidence caps.
 - The public verdict enum is unchanged: `VERIFIED` | `UNVERIFIED` | `UNCERTAIN` | `DISSENT`.
+
+### Added
+
+`verify({ claimMode: 'fact' })` for factual claims. Opt-in. Omitted or `'decision'` keeps decision-check scoring exactly, including when the critic emits KIND tags.
+
+In fact mode the critic adds `[KIND:false|fabricated|precision|incomplete|unverified|disagreement]` on each claim objection, and `[SCOPE:core|peripheral]` on bare-unverified ones. `false` and `fabricated` stay material, including an explicit counter-fact such as `is false: Kenya`. `precision`, `incomplete`, and `disagreement` do not: a `material` tag on those kinds is scored as `notable`. `unverified` is not material only when SCOPE is explicitly `peripheral` (exact numbering, a minor date, or sourcing) and the claim is not an accusation of crime, misconduct, causing death, or legal liability against a named person or organization. A missing or garbled KIND counts as material. A missing or garbled SCOPE counts as `core`. Proposal-targeted objections stay unscored. Takes effect together with `classifyMateriality`.

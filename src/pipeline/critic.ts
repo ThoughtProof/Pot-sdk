@@ -309,7 +309,7 @@ export async function runCritic(
   dryRun: boolean = false,
   contextText?: string,
   criticMode: CriticMode = 'adversarial',
-  options?: { requireCitation?: boolean; classifyObjections?: boolean; classifyMateriality?: boolean; trustContext?: { trusted?: string; toVerify?: string } },
+  options?: { requireCitation?: boolean; classifyObjections?: boolean; classifyMateriality?: boolean; factMode?: boolean; accusation?: boolean; trustContext?: { trusted?: string; toVerify?: string } },
   fallbackProviders?: Array<{ provider: Provider; model: string }>,
 ): Promise<Critique> {
   if (dryRun) {
@@ -385,6 +385,30 @@ When in doubt between claim and proposal, use [TARGET:claim].
 The system's bias should remain conservative on the claim itself.
 
 OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restate the proposals — go straight to the classified objections. Your entire response should be the objection list plus the overall assessment.`;
+    if (options.factMode) {
+      prompt += `\n\nFACT MODE — KIND (CRITICAL — for every TARGET:claim objection):
+This check is a factual claim, not a decision. For each objection tagged [TARGET:claim], add exactly one KIND. Proposal-only objections may omit KIND.
+
+[KIND:false] = The claim is factually false, contradicted by a specific fact, or misattributed. Name the counter-fact: wrong person, date, number, case, statute, or outcome.
+[KIND:fabricated] = The claim invents a source, quote, case, statute, event, or attribution, or assigns a real one to the wrong thing.
+[KIND:precision] = The claim is not shown false. It is vague, over-precise, or uses a loose word ("most", "about").
+[KIND:incomplete] = Something is omitted, or the legal test or definition could be broader. The stated fact is not shown false.
+[KIND:unverified] = You cannot confirm something, or you have only speculative doubt, and you have no concrete counter-fact. A bare "UNVERIFIED" is this kind.
+[KIND:disagreement] = Generators disagree with each other. That disagreement is not itself a concrete counter-fact.
+
+[KIND:false] and [KIND:fabricated] are always material. An objection that states a concrete counter-fact ("factually false: Kenya", "is false: Kenya") is [KIND:false] and stays material in every case.
+[KIND:precision], [KIND:incomplete], and [KIND:disagreement] are not material.
+
+SCOPE (CRITICAL — on every KIND:unverified objection):
+[SCOPE:core] = The doubt is about the claim's central who, what, or outcome. A factual accusation of crime, misconduct, causing death, or legal liability against a named real person or organization is always core. Never mark that accusation peripheral.
+[SCOPE:peripheral] = The doubt is only a side detail: exact numbering, a minor date, or sourcing. The central assertion is not what you failed to confirm.
+If you are unsure, use [SCOPE:core]. A bare UNVERIFIED objection is not material only when it is [SCOPE:peripheral] and it is not about such an accusation.
+
+If you are unsure which KIND applies, use [KIND:false].
+
+Use this format:
+[TARGET:claim|proposal:N][KIND:false|fabricated|precision|incomplete|unverified|disagreement][SCOPE:core|peripheral][MATERIALITY:material|notable|minor] OBJECTION: [description]`;
+    }
   }
 
   let response: { content: string };
@@ -433,12 +457,15 @@ OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restat
         throw new Error(String(firstErr?.reason ?? 'all critic samples failed'));
       }
       // Median by claim-scoped materialCount (proposal-targeted objections
-      // do not count). Tie-break: lower notableCount → the less alarmist of
-      // equally-material critiques; deterministic ordering.
+      // do not count; in fact mode, non-defect kinds do not count either).
+      // Tie-break: lower notableCount → the less alarmist of equally-material
+      // critiques; deterministic ordering.
       const claimProposalIndexes = claimBearingProposalIndexes(proposals);
+      const factMode = options?.factMode === true;
+      const accusation = options?.accusation === true;
       const scored = ok
         .map(r => {
-          const m = parseMaterialityClassifications(r.content, { claimProposalIndexes });
+          const m = parseMaterialityClassifications(r.content, { claimProposalIndexes, factMode, accusation });
           return { r, material: m.materialCount, notable: m.notableCount };
         })
         .sort((a, b) => a.material - b.material || a.notable - b.notable);
@@ -519,6 +546,20 @@ export type OverallAssessment = 'sound' | 'adequate' | 'questionable' | 'deficie
 /** Where an objection lands. `proposal:<n>` is 1-based, matching PROPOSAL headings. */
 export type ObjectionTarget = 'claim' | `proposal:${number}`;
 
+/**
+ * Why a claim objection was raised. In fact mode `false` and `fabricated`
+ * count as material. `precision`, `incomplete`, and `disagreement` are
+ * demoted. `unverified` is demoted only when SCOPE is explicitly peripheral
+ * and the claim is not a factual accusation.
+ */
+export type ObjectionKind = 'false' | 'fabricated' | 'precision' | 'incomplete' | 'unverified' | 'disagreement';
+
+/** What a bare-unverified objection is about. Missing or garbled tags count as core. */
+export type ObjectionScope = 'core' | 'peripheral';
+
+const FACT_MATERIAL_KINDS = new Set<ObjectionKind>(['false', 'fabricated']);
+const FACT_NON_MATERIAL_KINDS = new Set<ObjectionKind>(['precision', 'incomplete', 'unverified', 'disagreement']);
+
 export interface MaterialityObjection {
   materiality: MaterialityLevel;
   description: string;
@@ -531,6 +572,25 @@ export interface MaterialityObjection {
   targetDefaulted?: boolean;
   /** False when excluded from materiality counts and confidence penalties. */
   scored?: boolean;
+  /** Parsed KIND tag, when it was one of the six fact-mode kinds. */
+  kind?: ObjectionKind;
+  /** True when a KIND tag was required for demotion and was missing or garbled. */
+  kindDefaulted?: boolean;
+  /**
+   * core or peripheral. Set on fact-mode parses. Missing or garbled SCOPE
+   * is stored as core.
+   */
+  scope?: ObjectionScope;
+  /** True when SCOPE was absent or not `core` / `peripheral`. */
+  scopeDefaulted?: boolean;
+  /**
+   * Materiality used for counts. Equals `materiality` outside fact mode.
+   * In fact mode, precision, incompleteness, and disagreement demote
+   * `material` to `notable`. Bare unverified demotes only when SCOPE is
+   * explicitly peripheral and the claim is not an accusation. A missing or
+   * garbled KIND or SCOPE on a claim objection counts as material.
+   */
+  effectiveMateriality?: MaterialityLevel;
 }
 
 export interface MaterialityResult {
@@ -548,6 +608,8 @@ export interface MaterialityResult {
    * the raw overall (fail-closed).
    */
   scoringOverallAssessment?: OverallAssessment;
+  /** True when fact-mode kind demotion was applied. */
+  factMode?: boolean;
 }
 
 export interface ParseMaterialityOptions {
@@ -556,6 +618,17 @@ export interface ParseMaterialityOptions {
    * A `TARGET:proposal:N` tag for one of these is scored as `claim`.
    */
   claimProposalIndexes?: number[];
+  /**
+   * Factual-claim scoring. Non-defect kinds do not count as material.
+   * Omitted or false keeps decision-check scoring.
+   */
+  factMode?: boolean;
+  /**
+   * The claim accuses a named person or organization of a crime, misconduct,
+   * causing death, or legal liability. Bare UNVERIFIED then stays material
+   * even if the critic marked it peripheral.
+   */
+  accusation?: boolean;
 }
 
 /** 1-based indexes of proposals that carry the claim text rather than a generator answer. */
@@ -582,18 +655,69 @@ function parseTargetBody(raw: string | undefined): { target: ObjectionTarget; de
   return { target: 'claim', defaulted: true };
 }
 
-function resolveAdjacentTarget(
+function parseKindBody(raw: string | undefined): { kind?: ObjectionKind; defaulted: boolean } {
+  if (raw == null) return { defaulted: true };
+  const body = raw.trim().toLowerCase().replace(/\s+/g, '');
+  if (FACT_MATERIAL_KINDS.has(body as ObjectionKind) || FACT_NON_MATERIAL_KINDS.has(body as ObjectionKind)) {
+    return { kind: body as ObjectionKind, defaulted: false };
+  }
+  return { defaulted: true };
+}
+
+interface ClusterTag {
+  name: 'target' | 'kind' | 'scope';
+  body: string;
+  length: number;
+}
+
+function readTagPrefix(text: string): ClusterTag | null {
+  const match = /\[(TARGET|KIND|SCOPE):([^\]]*)\]\s*$/i.exec(text);
+  if (!match) return null;
+  return { name: match[1].toLowerCase() as ClusterTag['name'], body: match[2], length: match[0].length };
+}
+
+function readTagSuffix(text: string): ClusterTag | null {
+  const match = /^\s*\[(TARGET|KIND|SCOPE):([^\]]*)\]/i.exec(text);
+  if (!match) return null;
+  return { name: match[1].toLowerCase() as ClusterTag['name'], body: match[2], length: match[0].length };
+}
+
+/** TARGET, KIND, and SCOPE tags that touch this MATERIALITY tag, with only tags and whitespace between them. */
+function collectAdjacentTags(
   content: string,
   materialityIndex: number,
   materialityTagLength: number,
-): { target: ObjectionTarget; defaulted: boolean } {
-  const before = content.slice(0, materialityIndex);
-  const after = content.slice(materialityIndex + materialityTagLength);
-  const beforeMatch = before.match(/\[TARGET:([^\]]*)\]\s*$/i);
-  const afterMatch = after.match(/^\s*\[TARGET:([^\]]*)\]/i);
-  const parsed = [beforeMatch?.[1], afterMatch?.[1]]
-    .filter((value): value is string => value != null)
-    .map(parseTargetBody);
+): { targets: string[]; kinds: string[]; scopes: string[] } {
+  const targets: string[] = [];
+  const kinds: string[] = [];
+  const scopes: string[] = [];
+  const push = (tag: ClusterTag) => {
+    if (tag.name === 'target') targets.push(tag.body);
+    else if (tag.name === 'kind') kinds.push(tag.body);
+    else scopes.push(tag.body);
+  };
+
+  let before = content.slice(0, materialityIndex);
+  for (;;) {
+    const tag = readTagPrefix(before);
+    if (!tag) break;
+    push(tag);
+    before = before.slice(0, before.length - tag.length);
+  }
+
+  let after = content.slice(materialityIndex + materialityTagLength);
+  for (;;) {
+    const tag = readTagSuffix(after);
+    if (!tag) break;
+    push(tag);
+    after = after.slice(tag.length);
+  }
+
+  return { targets, kinds, scopes };
+}
+
+function resolveAdjacentTarget(targets: string[]): { target: ObjectionTarget; defaulted: boolean } {
+  const parsed = targets.map(parseTargetBody);
   if (parsed.length === 0) return { target: 'claim', defaulted: true };
   // Claim wins if both sides are tagged. A real claim defect must not be
   // dropped because a proposal tag was also present.
@@ -604,31 +728,115 @@ function resolveAdjacentTarget(
   return { target: 'claim', defaulted: true };
 }
 
+function resolveAdjacentKind(kinds: string[]): { kind?: ObjectionKind; defaulted: boolean } {
+  const parsed = kinds.map(parseKindBody);
+  // A concrete falsehood wins over a softer kind on the same objection.
+  const material = parsed.find(item => item.kind != null && FACT_MATERIAL_KINDS.has(item.kind));
+  if (material?.kind) return { kind: material.kind, defaulted: false };
+  const soft = parsed.find(item => item.kind != null && FACT_NON_MATERIAL_KINDS.has(item.kind));
+  if (soft?.kind) return { kind: soft.kind, defaulted: false };
+  return { defaulted: true };
+}
+
+function parseScopeBody(raw: string | undefined): { scope?: ObjectionScope; defaulted: boolean } {
+  if (raw == null) return { defaulted: true };
+  const body = raw.trim().toLowerCase().replace(/\s+/g, '');
+  if (body === 'core' || body === 'peripheral') return { scope: body, defaulted: false };
+  return { defaulted: true };
+}
+
+function resolveAdjacentScope(scopes: string[]): { scope: ObjectionScope; defaulted: boolean } {
+  const parsed = scopes.map(parseScopeBody);
+  // Core wins if both are present. A missing or garbled tag is core.
+  if (parsed.some(item => item.scope === 'core')) return { scope: 'core', defaulted: false };
+  const peripheral = parsed.find(item => item.scope === 'peripheral');
+  if (peripheral?.scope) return { scope: peripheral.scope, defaulted: false };
+  return { scope: 'core', defaulted: true };
+}
+
+/** "is false: Kenya" / "factually false: Kenya" names a concrete counter-fact. */
+function statesConcreteCounterFact(description: string): boolean {
+  return /\b(?:factually\s+false|is\s+false|false)\s*:/i.test(description);
+}
+
+const ACCUSATION_ACT = /\b(murder(?:ed|s|ing)?|homicide|manslaughter|killed|killing|assassinat(?:e|ed|es|ion)|raped|raping|rape|assault(?:ed|ing)?|molest(?:ed|ing|ation)?|child abuse|abused|abusing|fraud(?:ulent)?|embezzl(?:e|ed|ing|ement)|bribe(?:d|ry)?|bribing|misconduct|felony|convicted of|guilty of|liable for|legal liability|sued for)\b/i;
+
+/**
+ * True when the claim accuses a named person or organization of a crime,
+ * misconduct, causing death, or legal liability. Fail-closed for fact mode:
+ * bare UNVERIFIED doubt on that claim stays material.
+ */
+export function claimIsFactualAccusation(claim: string): boolean {
+  if (!ACCUSATION_ACT.test(claim)) return false;
+  return /\b[A-Z][A-Za-z0-9]{2,}\b/.test(claim);
+}
+
+function applyFactKind(
+  materiality: MaterialityLevel,
+  kindInfo: { kind?: ObjectionKind; defaulted: boolean },
+  scopeInfo: { scope: ObjectionScope; defaulted: boolean },
+  description: string,
+  accusation: boolean,
+): MaterialityLevel {
+  if (statesConcreteCounterFact(description)) return 'material';
+  if (!kindInfo.defaulted && kindInfo.kind && FACT_MATERIAL_KINDS.has(kindInfo.kind)) return 'material';
+  if (!kindInfo.defaulted && kindInfo.kind === 'unverified') {
+    // Peripheral doubt (numbering, a minor date, sourcing) is not a defect.
+    // Core doubt, a missing scope, and any accusation stay material.
+    if (!accusation && scopeInfo.scope === 'peripheral' && !scopeInfo.defaulted) {
+      return materiality === 'material' ? 'notable' : materiality;
+    }
+    return 'material';
+  }
+  if (!kindInfo.defaulted && kindInfo.kind && FACT_NON_MATERIAL_KINDS.has(kindInfo.kind)) {
+    return materiality === 'material' ? 'notable' : materiality;
+  }
+  // Missing or garbled KIND: fail closed.
+  return 'material';
+}
+
 export function parseMaterialityClassifications(
   critiqueContent: string,
   options?: ParseMaterialityOptions,
 ): MaterialityResult {
-  const pattern = /\[MATERIALITY:(material|notable|minor)\](?:\s*\[TARGET:[^\]]*\])?\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[TARGET:|\[OVERALL:]|\n\n|$)/gis;
+  const pattern = /\[MATERIALITY:(material|notable|minor)\](?:\s*\[(?:TARGET|KIND|SCOPE):[^\]]*\])*\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[TARGET:|\[KIND:|\[SCOPE:|\[OVERALL:]|\n\n|$)/gis;
   const claimIndexes = new Set(options?.claimProposalIndexes ?? []);
+  const factMode = options?.factMode === true;
+  const accusation = options?.accusation === true;
   const objections: MaterialityObjection[] = [];
   let match;
   while ((match = pattern.exec(critiqueContent)) !== null) {
     const tagMatch = /^\[MATERIALITY:[^\]]+\]/i.exec(match[0]);
     const tagLength = tagMatch ? tagMatch[0].length : match[0].length;
-    let resolved = resolveAdjacentTarget(critiqueContent, match.index, tagLength);
+    const cluster = collectAdjacentTags(critiqueContent, match.index, tagLength);
+    let resolved = resolveAdjacentTarget(cluster.targets);
     if (!resolved.defaulted && resolved.target.startsWith('proposal:')) {
       const index = Number(resolved.target.slice('proposal:'.length));
       if (claimIndexes.has(index)) {
         resolved = { target: 'claim', defaulted: false };
       }
     }
-    let description = match[2].trim().replace(/^\[TARGET:[^\]]*\]\s*/i, '').replace(/^OBJECTION:\s*/i, '');
+    const kindInfo = resolveAdjacentKind(cluster.kinds);
+    const scopeInfo = resolveAdjacentScope(cluster.scopes);
+    const materiality = match[1].toLowerCase() as MaterialityLevel;
+    const scored = resolved.target === 'claim';
+    let description = match[2].trim()
+      .replace(/^(?:\[(?:TARGET|KIND|SCOPE):[^\]]*\]\s*)+/i, '')
+      .replace(/^OBJECTION:\s*/i, '');
+    description = description.trim().slice(0, 800);
+    const effectiveMateriality = factMode && scored
+      ? applyFactKind(materiality, kindInfo, scopeInfo, description, accusation)
+      : materiality;
     objections.push({
-      materiality: match[1].toLowerCase() as MaterialityLevel,
-      description: description.trim().slice(0, 800),
+      materiality,
+      description,
       target: resolved.target,
       targetDefaulted: resolved.defaulted,
-      scored: resolved.target === 'claim',
+      scored,
+      ...(kindInfo.kind ? { kind: kindInfo.kind } : {}),
+      kindDefaulted: kindInfo.defaulted,
+      ...(factMode ? { scope: scopeInfo.scope, scopeDefaulted: scopeInfo.defaulted } : {}),
+      effectiveMateriality,
     });
   }
 
@@ -636,18 +844,27 @@ export function parseMaterialityClassifications(
   const overallMatch = critiqueContent.match(/\[OVERALL:(sound|adequate|questionable|deficient)\]/i);
   const overallAssessment: OverallAssessment = (overallMatch?.[1]?.toLowerCase() as OverallAssessment) || 'questionable';
 
-  const scored = objections.filter(objection => objection.scored !== false);
-  const materialCount = scored.filter(o => o.materiality === 'material').length;
-  const notableCount = scored.filter(o => o.materiality === 'notable').length;
-  const minorCount = scored.filter(o => o.materiality === 'minor').length;
+  const scoredObjections = objections.filter(objection => objection.scored !== false);
+  const levelOf = (objection: MaterialityObjection) => objection.effectiveMateriality ?? objection.materiality;
+  const materialCount = scoredObjections.filter(o => levelOf(o) === 'material').length;
+  const notableCount = scoredObjections.filter(o => levelOf(o) === 'notable').length;
+  const minorCount = scoredObjections.filter(o => levelOf(o) === 'minor').length;
 
   const explicitProposalOnly = objections.length > 0 && objections.every(
     objection => objection.scored === false && objection.targetDefaulted === false,
   );
   const harshOverall = overallAssessment === 'deficient' || overallAssessment === 'questionable';
-  const scoringOverallAssessment: OverallAssessment = explicitProposalOnly && harshOverall
-    ? 'sound'
-    : overallAssessment;
+  let scoringOverallAssessment: OverallAssessment = overallAssessment;
+  if (harshOverall && !factMode && explicitProposalOnly) {
+    scoringOverallAssessment = 'sound';
+  } else if (harshOverall && factMode && objections.length > 0 && materialCount === 0) {
+    const onlyNonMaterialKinds = scoredObjections.every(
+      objection => objection.kind != null
+        && FACT_NON_MATERIAL_KINDS.has(objection.kind)
+        && objection.kindDefaulted !== true,
+    );
+    if (onlyNonMaterialKinds) scoringOverallAssessment = 'sound';
+  }
 
   return {
     objections,
@@ -657,6 +874,7 @@ export function parseMaterialityClassifications(
     hasMaterialDefect: materialCount > 0,
     overallAssessment,
     scoringOverallAssessment,
+    factMode,
   };
 }
 
@@ -669,9 +887,14 @@ export function critiqueMentionsClaimUnverified(
   parsed: MaterialityResult,
 ): boolean {
   if (!/\bunverified\b/i.test(critiqueContent)) return false;
-  let remainder = critiqueContent;
+  // The KIND label is not an assertion that the claim is unverified.
+  let remainder = critiqueContent.replace(/\[KIND:\s*unverified\s*\]/gi, ' ');
   for (const objection of parsed.objections) {
-    if (objection.scored === false && objection.description) {
+    const demoted = parsed.factMode === true
+      && objection.scored !== false
+      && objection.effectiveMateriality != null
+      && objection.effectiveMateriality !== 'material';
+    if ((objection.scored === false || demoted) && objection.description) {
       remainder = remainder.replace(objection.description, ' ');
     }
   }
