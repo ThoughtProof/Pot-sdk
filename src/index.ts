@@ -4,7 +4,7 @@ export type { DomainConfig, DomainLockfile } from './domains.js';
 export type { DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, ObjectionType, ObjectionSeverity, FailureCost, Audience, PipelineResult, CalibrationCriticResult, StakeLevel, TrustContext } from './types.js';
 export { STAKE_THRESHOLDS } from './types.js';
 export { parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
-export type { MaterialityLevel, OverallAssessment, MaterialityObjection, MaterialityResult } from './pipeline/critic.js';
+export type { MaterialityLevel, OverallAssessment, MaterialityObjection, MaterialityResult, ObjectionTarget } from './pipeline/critic.js';
 export { calibrateConfidence, calibrateByModel } from './calibration.js';
 export type { CalibrationResult } from './calibration.js';
 export { factCheckCritic } from './pipeline/factcheck.js';

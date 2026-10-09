@@ -1,7 +1,7 @@
 import type { VerificationResult, Proposal, Synthesis, VerificationFlag, GeneratorConfig, ProviderConfig, Verdict, VerificationMode, CriticMode, DomainProfile, OutputFormat, ReceptiveMode, ClassifiedObjection, FailureCost, Audience, PipelineResult } from './types.js';
 import { DOMAIN_PROFILES, DOMAIN_REFERENCE_CONTEXT, checkToxicCombination, resolveDomain, detectDomain } from './domains.js';
 import type { DomainConfig, DomainLockfile } from './domains.js';
-import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence } from './pipeline/critic.js';
+import { parseClassifiedObjections, parseCalibrationCriticResult, parseMaterialityClassifications, calculateMaterialityConfidence, claimBearingProposalIndexes, critiqueMentionsClaimUnverified } from './pipeline/critic.js';
 import type { MaterialityResult } from './pipeline/critic.js';
 import { factCheckCritic } from './pipeline/factcheck.js';
 import { runGenerators } from './pipeline/generator.js';
@@ -682,9 +682,14 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
     }
   }
 
-  // Semantic flags from AI pipeline
-  const UNVERIFIED_PATTERN = /\bunverified\b/i;
-  if (UNVERIFIED_PATTERN.test(critique.content)) flags.push('unverified-claims');
+  // Semantic flags from AI pipeline.
+  // "unverified" inside an explicitly proposal-scoped objection is a generator
+  // defect, not a defect of the claim. Missing target tags still flag.
+  const claimProposalIndexes = claimBearingProposalIndexes(proposals);
+  if (critiqueMentionsClaimUnverified(
+    critique.content,
+    parseMaterialityClassifications(critique.content, { claimProposalIndexes }),
+  )) flags.push('unverified-claims');
   // Only flag synthesis-dominance when 3+ generators exist — with 2 generators,
   // some dominance is expected and should not block VERIFIED verdict.
   if (balance.warning && gensProviders.length >= 3) flags.push('synthesis-dominance');
@@ -788,7 +793,7 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
   // This replaces the synthesis-based confidence for ALLOW/HOLD decisions
   let materialityResult: MaterialityResult | undefined;
   if (params.classifyMateriality) {
-    materialityResult = parseMaterialityClassifications(critique.content);
+    materialityResult = parseMaterialityClassifications(critique.content, { claimProposalIndexes });
     const materialityConfidence = calculateMaterialityConfidence(materialityResult);
 
     // Use materiality confidence if it's HIGHER than synthesis confidence
@@ -798,9 +803,11 @@ export async function verify(output: string, params: VerifyParams): Promise<Veri
       finalCalibratedConfidence = Math.min(finalCalibratedConfidence, materialityConfidence);
     } else {
       // No material defects → use materiality confidence (likely higher)
-      // But cap it based on overall assessment
+      // Cap from scoringOverallAssessment so proposal-only critiques do not
+      // apply the deficient/questionable ceiling to the claim.
       const assessmentCaps: Record<string, number> = { sound: 0.95, adequate: 0.80, questionable: 0.60, deficient: 0.30 };
-      const cap = assessmentCaps[materialityResult.overallAssessment] ?? 0.60;
+      const overallForCap = materialityResult.scoringOverallAssessment ?? materialityResult.overallAssessment;
+      const cap = assessmentCaps[overallForCap] ?? 0.60;
       finalCalibratedConfidence = Math.min(cap, Math.max(finalCalibratedConfidence, materialityConfidence));
     }
   }
