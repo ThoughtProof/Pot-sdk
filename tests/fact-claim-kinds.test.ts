@@ -59,7 +59,8 @@ describe('parseMaterialityClassifications fact-mode kinds', () => {
         materiality: 'material',
         effectiveMateriality: 'notable',
       });
-      expect(calculateMaterialityConfidence(parsed)).toBeCloseTo(0.9, 5);
+      // Soft notables cost 0.03 in fact mode, not 0.10.
+      expect(calculateMaterialityConfidence(parsed)).toBeCloseTo(0.97, 5);
     },
   );
 

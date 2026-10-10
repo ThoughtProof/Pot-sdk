@@ -387,27 +387,32 @@ The system's bias should remain conservative on the claim itself.
 OUTPUT DISCIPLINE: Be direct and compact. Do NOT write analysis essays or restate the proposals — go straight to the classified objections. Your entire response should be the objection list plus the overall assessment.`;
     if (options.factMode) {
       prompt += `\n\nFACT MODE — KIND (CRITICAL — for every TARGET:claim objection):
-This check is a factual claim, not a decision. For each objection tagged [TARGET:claim], add exactly one KIND. Proposal-only objections may omit KIND.
+This check is a factual claim, not a decision. For each objection tagged [TARGET:claim], add exactly one KIND and one SCOPE. Proposal-only objections may omit KIND.
 
-[KIND:false] = The claim is factually false, contradicted by a specific fact, or misattributed. Name the counter-fact: wrong person, date, number, case, statute, or outcome.
-[KIND:fabricated] = The claim invents a source, quote, case, statute, event, or attribution, or assigns a real one to the wrong thing.
+[KIND:false] = The claim is factually false or misattributed, and you can state what is actually true. Put that fact in COUNTERFACT, in your own words (person, date, number, case, statute, or outcome).
+[KIND:fabricated] = The claim invents a source, quote, case, statute, event, or attribution. COUNTERFACT states what is actually true, or that the cited source does not exist.
+[KIND:misleading-omission] = A fact is omitted and that omission makes the answer misleading or dangerous: a safety, health, or legal consequence, or it reverses the takeaway. Example: a health answer that names bromide where chloride is the indicated substance. This kind is material. It is not incomplete.
 [KIND:precision] = The claim is not shown false. It is vague, over-precise, or uses a loose word ("most", "about").
-[KIND:incomplete] = Something is omitted, or the legal test or definition could be broader. The stated fact is not shown false.
+[KIND:incomplete] = Something is omitted, or a definition could be broader, and the omission does not mislead, endanger, or reverse the takeaway. The stated fact is not shown false.
 [KIND:unverified] = You cannot confirm something, or you have only speculative doubt, and you have no concrete counter-fact. A bare "UNVERIFIED" is this kind.
-[KIND:disagreement] = Generators disagree with each other. That disagreement is not itself a concrete counter-fact.
+[KIND:disagreement] = The only basis is that generators or proposals disagree, or that one proposal says otherwise. That is not an independent counter-fact. Use this instead of false or fabricated when you cannot state what is actually true yourself.
 
-[KIND:false] and [KIND:fabricated] are always material. An objection that states a concrete counter-fact ("factually false: Kenya", "is false: Kenya") is [KIND:false] and stays material in every case.
-[KIND:precision], [KIND:incomplete], and [KIND:disagreement] are not material.
+COUNTERFACT (required on KIND:false and KIND:fabricated):
+[COUNTERFACT: what is actually true]
+State the independent fact. "Generator 1 says otherwise" and "one proposal claims the text is fabricated" are not counter-facts — those are [KIND:disagreement]. An objection that states a concrete counter-fact ("factually false: Kenya", "is false: Kenya") is [KIND:false] and stays material in every case.
+[KIND:precision], [KIND:incomplete], and [KIND:disagreement] are not material. [KIND:misleading-omission] is material.
 
-SCOPE (CRITICAL — on every KIND:unverified objection):
-[SCOPE:core] = The doubt is about the claim's central who, what, or outcome. A factual accusation of crime, misconduct, causing death, or legal liability against a named real person or organization is always core. Never mark that accusation peripheral.
-[SCOPE:peripheral] = The doubt is only a side detail: exact numbering, a minor date, or sourcing. The central assertion is not what you failed to confirm.
+Do not emit an objection that affirms the claim. "no factual error", "this is correct", and "acceptable" are not defects. Omit the objection.
+
+SCOPE (on every claim objection):
+[SCOPE:core] = The objection is about the claim's central who, what, or outcome. A factual accusation of crime, misconduct, causing death, or legal liability against a named real person or organization is always core. Never mark that accusation peripheral.
+[SCOPE:peripheral] = The objection is only a side detail: exact numbering, a minor date, or sourcing. The central assertion is not what you failed to confirm.
 If you are unsure, use [SCOPE:core]. A bare UNVERIFIED objection is not material only when it is [SCOPE:peripheral] and it is not about such an accusation.
 
-If you are unsure which KIND applies, use [KIND:false].
+If you are unsure which KIND applies, use [KIND:false] and give a COUNTERFACT. If you have no independent counter-fact, use [KIND:disagreement].
 
 Use this format:
-[TARGET:claim|proposal:N][KIND:false|fabricated|precision|incomplete|unverified|disagreement][SCOPE:core|peripheral][MATERIALITY:material|notable|minor] OBJECTION: [description]`;
+[TARGET:claim|proposal:N][KIND:false|fabricated|misleading-omission|precision|incomplete|unverified|disagreement][SCOPE:core|peripheral][COUNTERFACT: what is actually true][MATERIALITY:material|notable|minor] OBJECTION: [description]`;
     }
   }
 
@@ -548,17 +553,23 @@ export type ObjectionTarget = 'claim' | `proposal:${number}`;
 
 /**
  * Why a claim objection was raised. In fact mode `false` and `fabricated`
- * count as material. `precision`, `incomplete`, and `disagreement` are
+ * count as material only with an independent counter-fact. `misleading-omission`
+ * counts as material. `precision`, `incomplete`, and `disagreement` are
  * demoted. `unverified` is demoted only when SCOPE is explicitly peripheral
  * and the claim is not a factual accusation.
  */
-export type ObjectionKind = 'false' | 'fabricated' | 'precision' | 'incomplete' | 'unverified' | 'disagreement';
+export type ObjectionKind = 'false' | 'fabricated' | 'misleading-omission' | 'precision' | 'incomplete' | 'unverified' | 'disagreement';
 
 /** What a bare-unverified objection is about. Missing or garbled tags count as core. */
 export type ObjectionScope = 'core' | 'peripheral';
 
-const FACT_MATERIAL_KINDS = new Set<ObjectionKind>(['false', 'fabricated']);
+const FACT_MATERIAL_KINDS = new Set<ObjectionKind>(['false', 'fabricated', 'misleading-omission']);
 const FACT_NON_MATERIAL_KINDS = new Set<ObjectionKind>(['precision', 'incomplete', 'unverified', 'disagreement']);
+/** Notable objections of these kinds are cheap in fact mode. Other notables stay at 0.10. */
+const SOFT_NOTABLE_KINDS = new Set<ObjectionKind>(['precision', 'incomplete', 'unverified', 'disagreement']);
+const SOFT_NOTABLE_PENALTY = 0.03;
+/** Soft notables alone cannot push confidence below this floor. */
+const SOFT_NOTABLE_FLOOR = 0.80;
 
 export interface MaterialityObjection {
   materiality: MaterialityLevel;
@@ -587,10 +598,23 @@ export interface MaterialityObjection {
    * Materiality used for counts. Equals `materiality` outside fact mode.
    * In fact mode, precision, incompleteness, and disagreement demote
    * `material` to `notable`. Bare unverified demotes only when SCOPE is
-   * explicitly peripheral and the claim is not an accusation. A missing or
-   * garbled KIND or SCOPE on a claim objection counts as material.
+   * explicitly peripheral and the claim is not an accusation. `false` and
+   * `fabricated` without an independent counter-fact demote the same way
+   * unless the claim is an accusation or SCOPE is missing. A missing or
+   * garbled KIND counts as material.
    */
   effectiveMateriality?: MaterialityLevel;
+  /** Fact mode: the objection affirms the claim, so it is not counted. */
+  affirming?: boolean;
+  /** COUNTERFACT body, when the critic supplied one. */
+  counterfact?: string;
+  /** True when COUNTERFACT states an independent fact, not a generator's say-so. */
+  counterfactIndependent?: boolean;
+  /**
+   * Fact mode: KIND was false or fabricated, but there was no independent
+   * counter-fact, so the objection is scored as disagreement.
+   */
+  reclassifiedDisagreement?: boolean;
 }
 
 export interface MaterialityResult {
@@ -665,36 +689,38 @@ function parseKindBody(raw: string | undefined): { kind?: ObjectionKind; default
 }
 
 interface ClusterTag {
-  name: 'target' | 'kind' | 'scope';
+  name: 'target' | 'kind' | 'scope' | 'counterfact';
   body: string;
   length: number;
 }
 
 function readTagPrefix(text: string): ClusterTag | null {
-  const match = /\[(TARGET|KIND|SCOPE):([^\]]*)\]\s*$/i.exec(text);
+  const match = /\[(TARGET|KIND|SCOPE|COUNTERFACT):([^\]]*)\]\s*$/i.exec(text);
   if (!match) return null;
   return { name: match[1].toLowerCase() as ClusterTag['name'], body: match[2], length: match[0].length };
 }
 
 function readTagSuffix(text: string): ClusterTag | null {
-  const match = /^\s*\[(TARGET|KIND|SCOPE):([^\]]*)\]/i.exec(text);
+  const match = /^\s*\[(TARGET|KIND|SCOPE|COUNTERFACT):([^\]]*)\]/i.exec(text);
   if (!match) return null;
   return { name: match[1].toLowerCase() as ClusterTag['name'], body: match[2], length: match[0].length };
 }
 
-/** TARGET, KIND, and SCOPE tags that touch this MATERIALITY tag, with only tags and whitespace between them. */
+/** Tags that touch this MATERIALITY tag, with only tags and whitespace between them. */
 function collectAdjacentTags(
   content: string,
   materialityIndex: number,
   materialityTagLength: number,
-): { targets: string[]; kinds: string[]; scopes: string[] } {
+): { targets: string[]; kinds: string[]; scopes: string[]; counterfacts: string[] } {
   const targets: string[] = [];
   const kinds: string[] = [];
   const scopes: string[] = [];
+  const counterfacts: string[] = [];
   const push = (tag: ClusterTag) => {
     if (tag.name === 'target') targets.push(tag.body);
     else if (tag.name === 'kind') kinds.push(tag.body);
-    else scopes.push(tag.body);
+    else if (tag.name === 'scope') scopes.push(tag.body);
+    else counterfacts.push(tag.body);
   };
 
   let before = content.slice(0, materialityIndex);
@@ -713,7 +739,7 @@ function collectAdjacentTags(
     after = after.slice(tag.length);
   }
 
-  return { targets, kinds, scopes };
+  return { targets, kinds, scopes, counterfacts };
 }
 
 function resolveAdjacentTarget(targets: string[]): { target: ObjectionTarget; defaulted: boolean } {
@@ -730,7 +756,9 @@ function resolveAdjacentTarget(targets: string[]): { target: ObjectionTarget; de
 
 function resolveAdjacentKind(kinds: string[]): { kind?: ObjectionKind; defaulted: boolean } {
   const parsed = kinds.map(parseKindBody);
-  // A concrete falsehood wins over a softer kind on the same objection.
+  // A dangerous omission wins, then any other material kind, then a soft kind.
+  const omission = parsed.find(item => item.kind === 'misleading-omission');
+  if (omission?.kind) return { kind: omission.kind, defaulted: false };
   const material = parsed.find(item => item.kind != null && FACT_MATERIAL_KINDS.has(item.kind));
   if (material?.kind) return { kind: material.kind, defaulted: false };
   const soft = parsed.find(item => item.kind != null && FACT_NON_MATERIAL_KINDS.has(item.kind));
@@ -759,6 +787,82 @@ function statesConcreteCounterFact(description: string): boolean {
   return /\b(?:factually\s+false|is\s+false|false)\s*:/i.test(description);
 }
 
+const COUNTERFACT_PLACEHOLDER = /^(?:none|n\/a|na|unknown|unverified|unsure|otherwise|false|fabricated|no|yes|wrong|incorrect|not\s+true|the\s+opposite)\.?$/i;
+const COUNTERFACT_BOILERPLATE = new Set([
+  'claim', 'claims', 'wrong', 'incorrect', 'false', 'fabricated', 'text', 'this', 'that',
+  'otherwise', 'says', 'say', 'not', 'true', 'the', 'and', 'for', 'with', 'about', 'only',
+  'just', 'also', 'from', 'proposal', 'proposals', 'generator', 'generators', 'model',
+  'models', 'content', 'answer', 'statement', 'fact', 'facts', 'error', 'errors',
+]);
+
+/** A generator or proposal is the source of the sentence, not an independent fact. */
+function citesGenerator(text: string): boolean {
+  return /\bgenerators?\b/i.test(text)
+    || /\bmodels?\b/i.test(text)
+    || /\bproposals?\s*\d+\b/i.test(text)
+    || /\b(?:one|another|a|the other)\s+proposals?\b/i.test(text)
+    || /\baccording to\s+(?:a\s+|one\s+)?(?:generator|proposal|model)\b/i.test(text);
+}
+
+/**
+ * True when the critic states what is actually true. A pointer at another
+ * generator ("generator 1 says otherwise", "one proposal claims the text is
+ * fabricated") is not an independent counter-fact.
+ */
+function hasIndependentCounterfact(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const body = raw.trim().replace(/^["'`]+|["'`.]+$/g, '').trim();
+  if (!body || COUNTERFACT_PLACEHOLDER.test(body)) return false;
+  if (citesGenerator(body)) return false;
+  if (affirmsClaim(body)) return false;
+  if (/\d/.test(body)) return true;
+  const words = body.replace(/[^A-Za-z0-9\s'-]/g, ' ').split(/\s+/).filter(Boolean);
+  return words.some(word => word.length >= 3 && !COUNTERFACT_BOILERPLATE.has(word.toLowerCase()));
+}
+
+function extractCounterfact(tagBodies: string[], description: string): { counterfact?: string; description: string } {
+  let text = description;
+  const found = tagBodies.map(body => body.trim()).filter(body => body.length > 0);
+  const lead = /^\[COUNTERFACT:([^\]]*)\]\s*/i.exec(text);
+  if (lead) {
+    found.push(lead[1].trim());
+    text = text.slice(lead[0].length);
+  }
+  const inline = /(?:^|\s)COUNTERFACT:\s*(.+)$/i.exec(text);
+  if (inline) {
+    found.push(inline[1].replace(/\]$/, '').trim());
+    text = text.slice(0, inline.index).trim();
+  }
+  const independent = found.find(body => hasIndependentCounterfact(body));
+  const counterfact = independent ?? found.find(body => body.length > 0);
+  return { counterfact, description: text };
+}
+
+const AFFIRMING_PATTERNS = [
+  /\bno\s+factual\s+errors?\b/i,
+  /\bno\s+factual\s+inaccurac(?:y|ies)\b/i,
+  /\b(?:this|it|the claim|claim)\s+is\s+correct\b/i,
+  /\b(?:this|it|the claim|claim)\s+is\s+accurate\b/i,
+  /\bfactually\s+correct\b/i,
+  /\b(?:is|are|seems|remains)\s+acceptable\b/i,
+  /\bacceptable\b/i,
+];
+
+/** The objection agrees with the claim. Those are not defects in fact mode. */
+function affirmsClaim(description: string): boolean {
+  if (/\b(?:incorrect|inaccurate|fabricat\w*|misleading|dangerous|unacceptable)\b/i.test(description)) return false;
+  if (/\bfalse\s*:/i.test(description)) return false;
+  if (/\bnot\s+(?:correct|acceptable|accurate|true)\b/i.test(description)) return false;
+  for (const pattern of AFFIRMING_PATTERNS) {
+    const match = pattern.exec(description);
+    if (!match) continue;
+    const before = description.slice(Math.max(0, match.index - 16), match.index);
+    if (/\b(?:not|no|never|n't)\s*$/i.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
 const ACCUSATION_ACT = /\b(murder(?:ed|s|ing)?|homicide|manslaughter|killed|killing|assassinat(?:e|ed|es|ion)|raped|raping|rape|assault(?:ed|ing)?|molest(?:ed|ing|ation)?|child abuse|abused|abusing|fraud(?:ulent)?|embezzl(?:e|ed|ing|ement)|bribe(?:d|ry)?|bribing|misconduct|felony|convicted of|guilty of|liable for|legal liability|sued for)\b/i;
 
 /**
@@ -771,35 +875,64 @@ export function claimIsFactualAccusation(claim: string): boolean {
   return /\b[A-Z][A-Za-z0-9]{2,}\b/.test(claim);
 }
 
+interface FactApplication {
+  effectiveMateriality: MaterialityLevel;
+  affirming: boolean;
+  reclassifiedDisagreement: boolean;
+}
+
+function demoteSoft(materiality: MaterialityLevel): MaterialityLevel {
+  return materiality === 'material' ? 'notable' : materiality;
+}
+
 function applyFactKind(
   materiality: MaterialityLevel,
   kindInfo: { kind?: ObjectionKind; defaulted: boolean },
   scopeInfo: { scope: ObjectionScope; defaulted: boolean },
   description: string,
   accusation: boolean,
-): MaterialityLevel {
-  if (statesConcreteCounterFact(description)) return 'material';
-  if (!kindInfo.defaulted && kindInfo.kind && FACT_MATERIAL_KINDS.has(kindInfo.kind)) return 'material';
+  counterfact: string | undefined,
+): FactApplication {
+  const independent = hasIndependentCounterfact(counterfact) || statesConcreteCounterFact(description);
+  if (independent) {
+    return { effectiveMateriality: 'material', affirming: false, reclassifiedDisagreement: false };
+  }
+  // A dangerous omission stays material even without a COUNTERFACT field.
+  if (!kindInfo.defaulted && kindInfo.kind === 'misleading-omission') {
+    return { effectiveMateriality: 'material', affirming: false, reclassifiedDisagreement: false };
+  }
+  // An objection that says the claim is correct is not a defect.
+  if (affirmsClaim(description)) {
+    return { effectiveMateriality: 'minor', affirming: true, reclassifiedDisagreement: false };
+  }
+  if (!kindInfo.defaulted && (kindInfo.kind === 'false' || kindInfo.kind === 'fabricated')) {
+    // No independent counter-fact. Missing or garbled SCOPE stays material,
+    // as does any accusation. Otherwise this is generator disagreement.
+    if (accusation || scopeInfo.defaulted) {
+      return { effectiveMateriality: 'material', affirming: false, reclassifiedDisagreement: false };
+    }
+    return { effectiveMateriality: demoteSoft(materiality), affirming: false, reclassifiedDisagreement: true };
+  }
   if (!kindInfo.defaulted && kindInfo.kind === 'unverified') {
     // Peripheral doubt (numbering, a minor date, sourcing) is not a defect.
     // Core doubt, a missing scope, and any accusation stay material.
     if (!accusation && scopeInfo.scope === 'peripheral' && !scopeInfo.defaulted) {
-      return materiality === 'material' ? 'notable' : materiality;
+      return { effectiveMateriality: demoteSoft(materiality), affirming: false, reclassifiedDisagreement: false };
     }
-    return 'material';
+    return { effectiveMateriality: 'material', affirming: false, reclassifiedDisagreement: false };
   }
   if (!kindInfo.defaulted && kindInfo.kind && FACT_NON_MATERIAL_KINDS.has(kindInfo.kind)) {
-    return materiality === 'material' ? 'notable' : materiality;
+    return { effectiveMateriality: demoteSoft(materiality), affirming: false, reclassifiedDisagreement: false };
   }
   // Missing or garbled KIND: fail closed.
-  return 'material';
+  return { effectiveMateriality: 'material', affirming: false, reclassifiedDisagreement: false };
 }
 
 export function parseMaterialityClassifications(
   critiqueContent: string,
   options?: ParseMaterialityOptions,
 ): MaterialityResult {
-  const pattern = /\[MATERIALITY:(material|notable|minor)\](?:\s*\[(?:TARGET|KIND|SCOPE):[^\]]*\])*\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[TARGET:|\[KIND:|\[SCOPE:|\[OVERALL:]|\n\n|$)/gis;
+  const pattern = /\[MATERIALITY:(material|notable|minor)\](?:\s*\[(?:TARGET|KIND|SCOPE|COUNTERFACT):[^\]]*\])*\s*(?:OBJECTION:\s*)?(.+?)(?=\[MATERIALITY:|\[TARGET:|\[KIND:|\[SCOPE:|\[COUNTERFACT:|\[OVERALL:]|\n\n|$)/gis;
   const claimIndexes = new Set(options?.claimProposalIndexes ?? []);
   const factMode = options?.factMode === true;
   const accusation = options?.accusation === true;
@@ -821,12 +954,14 @@ export function parseMaterialityClassifications(
     const materiality = match[1].toLowerCase() as MaterialityLevel;
     const scored = resolved.target === 'claim';
     let description = match[2].trim()
-      .replace(/^(?:\[(?:TARGET|KIND|SCOPE):[^\]]*\]\s*)+/i, '')
+      .replace(/^(?:\[(?:TARGET|KIND|SCOPE|COUNTERFACT):[^\]]*\]\s*)+/i, '')
       .replace(/^OBJECTION:\s*/i, '');
-    description = description.trim().slice(0, 800);
-    const effectiveMateriality = factMode && scored
-      ? applyFactKind(materiality, kindInfo, scopeInfo, description, accusation)
-      : materiality;
+    const extracted = extractCounterfact(cluster.counterfacts, description.trim());
+    description = extracted.description.trim().slice(0, 800);
+    const applied = factMode && scored
+      ? applyFactKind(materiality, kindInfo, scopeInfo, description, accusation, extracted.counterfact)
+      : undefined;
+    const effectiveMateriality = applied ? applied.effectiveMateriality : materiality;
     objections.push({
       materiality,
       description,
@@ -837,6 +972,10 @@ export function parseMaterialityClassifications(
       kindDefaulted: kindInfo.defaulted,
       ...(factMode ? { scope: scopeInfo.scope, scopeDefaulted: scopeInfo.defaulted } : {}),
       effectiveMateriality,
+      ...(applied?.affirming ? { affirming: true } : {}),
+      ...(extracted.counterfact ? { counterfact: extracted.counterfact.slice(0, 400) } : {}),
+      ...(factMode ? { counterfactIndependent: hasIndependentCounterfact(extracted.counterfact) || statesConcreteCounterFact(description) } : {}),
+      ...(applied?.reclassifiedDisagreement ? { reclassifiedDisagreement: true } : {}),
     });
   }
 
@@ -844,11 +983,11 @@ export function parseMaterialityClassifications(
   const overallMatch = critiqueContent.match(/\[OVERALL:(sound|adequate|questionable|deficient)\]/i);
   const overallAssessment: OverallAssessment = (overallMatch?.[1]?.toLowerCase() as OverallAssessment) || 'questionable';
 
-  const scoredObjections = objections.filter(objection => objection.scored !== false);
+  const countedObjections = objections.filter(objection => objection.scored !== false && objection.affirming !== true);
   const levelOf = (objection: MaterialityObjection) => objection.effectiveMateriality ?? objection.materiality;
-  const materialCount = scoredObjections.filter(o => levelOf(o) === 'material').length;
-  const notableCount = scoredObjections.filter(o => levelOf(o) === 'notable').length;
-  const minorCount = scoredObjections.filter(o => levelOf(o) === 'minor').length;
+  const materialCount = countedObjections.filter(o => levelOf(o) === 'material').length;
+  const notableCount = countedObjections.filter(o => levelOf(o) === 'notable').length;
+  const minorCount = countedObjections.filter(o => levelOf(o) === 'minor').length;
 
   const explicitProposalOnly = objections.length > 0 && objections.every(
     objection => objection.scored === false && objection.targetDefaulted === false,
@@ -858,12 +997,10 @@ export function parseMaterialityClassifications(
   if (harshOverall && !factMode && explicitProposalOnly) {
     scoringOverallAssessment = 'sound';
   } else if (harshOverall && factMode && objections.length > 0 && materialCount === 0) {
-    const onlyNonMaterialKinds = scoredObjections.every(
-      objection => objection.kind != null
-        && FACT_NON_MATERIAL_KINDS.has(objection.kind)
-        && objection.kindDefaulted !== true,
-    );
-    if (onlyNonMaterialKinds) scoringOverallAssessment = 'sound';
+    // Nothing scored against the claim is material: generator disagreement
+    // relabelled as false, affirming objections, and soft kinds must not
+    // keep a deficient cap. An empty objection list still keeps the raw overall.
+    scoringOverallAssessment = 'sound';
   }
 
   return {
@@ -894,7 +1031,7 @@ export function critiqueMentionsClaimUnverified(
       && objection.scored !== false
       && objection.effectiveMateriality != null
       && objection.effectiveMateriality !== 'material';
-    if ((objection.scored === false || demoted) && objection.description) {
+    if ((objection.scored === false || objection.affirming === true || demoted) && objection.description) {
       remainder = remainder.replace(objection.description, ' ');
     }
   }
@@ -906,9 +1043,33 @@ export function critiqueMentionsClaimUnverified(
  * material = -0.30, notable = -0.10, minor = -0.02
  * Counts are claim-scoped: proposal-targeted objections are already excluded
  * from materialCount / notableCount / minorCount.
+ * In fact mode, notable precision / incomplete / peripheral-unverified /
+ * disagreement objections cost 0.03 each, and that component alone cannot
+ * drop confidence below 0.80. Other notables stay at 0.10.
  * Replaces the flat confidence when materiality data is available.
  */
 export function calculateMaterialityConfidence(result: MaterialityResult): number {
+  if (result.factMode === true && result.objections.length > 0) {
+    let material = 0;
+    let realNotable = 0;
+    let softNotable = 0;
+    let minor = 0;
+    for (const objection of result.objections) {
+      if (objection.scored === false || objection.affirming === true) continue;
+      const level = objection.effectiveMateriality ?? objection.materiality;
+      if (level === 'material') material++;
+      else if (level === 'minor') minor++;
+      else if (level === 'notable') {
+        const soft = objection.reclassifiedDisagreement === true
+          || (objection.kind != null && SOFT_NOTABLE_KINDS.has(objection.kind));
+        if (soft) softNotable++;
+        else realNotable++;
+      }
+    }
+    const softPenalty = Math.min(1 - SOFT_NOTABLE_FLOOR, softNotable * SOFT_NOTABLE_PENALTY);
+    const penalty = material * 0.30 + realNotable * 0.10 + softPenalty + minor * 0.02;
+    return Math.max(0, Math.min(1.0, 1.0 - penalty));
+  }
   const penalty =
     result.materialCount * 0.30 +
     result.notableCount * 0.10 +

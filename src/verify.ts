@@ -181,10 +181,14 @@ interface VerifyParams {
    * when the critic marks it `[SCOPE:peripheral]` (exact numbering, a minor
    * date, or sourcing) and the claim is not an accusation of crime,
    * misconduct, causing death, or legal liability against a named person or
-   * organization. A missing or garbled SCOPE counts as core. Falsehoods,
-   * fabrications, misattributions, and an explicit counter-fact
-   * (`is false: Kenya`) stay material. A missing or garbled KIND tag still
-   * counts as material.
+   * organization. A missing or garbled SCOPE counts as core. `false` and
+   * `fabricated` count as material when the critic states an independent
+   * counter-fact (`[COUNTERFACT: …]`, or `is false: Kenya`). A false objection
+   * whose only basis is another generator is scored as disagreement, except
+   * on an accusation or when SCOPE is missing. An objection that affirms the
+   * claim is not scored. `[KIND:misleading-omission]` stays material. Soft
+   * notables cost 0.03 each and alone cannot drop confidence below 0.80.
+   * A missing or garbled KIND tag still counts as material.
    * Omitted or `'decision'` keeps decision-check scoring exactly.
    * Takes effect together with `classifyMateriality`.
    */
